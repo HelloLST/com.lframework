@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace LFramework
 {
@@ -46,7 +46,7 @@ namespace LFramework
                     }
                     catch (System.Exception e)
                     {
-                        Debug.LogError($"[ObjectPool] OnSpawn error: {e.Message}", GameObject);
+                        LogManager.Error($"[ObjectPool] OnSpawn error: {e.Message}", GameObject.name);
                     }
                 }
             }
@@ -70,7 +70,7 @@ namespace LFramework
                     }
                     catch (System.Exception e)
                     {
-                        Debug.LogError($"[ObjectPool] OnDespawn error: {e.Message}", GameObject);
+                        LogManager.Error($"[ObjectPool] OnDespawn error: {e.Message}", GameObject.name);
                     }
                 }
             }

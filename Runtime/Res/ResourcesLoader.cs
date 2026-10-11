@@ -36,7 +36,7 @@ namespace LFramework
         {
             if (string.IsNullOrEmpty(path))
             {
-                Debug.LogError("[ResourcesLoader] Load failed: path is null or empty");
+                LogManager.Error("[ResourcesLoader] Load failed: path is null or empty");
                 return null;
             }
 
@@ -50,7 +50,7 @@ namespace LFramework
             T asset = Resources.Load<T>(path);
             if (asset == null)
             {
-                Debug.LogWarning($"[ResourcesLoader] Load failed: {path}");
+                LogManager.Warning($"[ResourcesLoader] Load failed: {path}");
                 return null;
             }
 
@@ -72,7 +72,7 @@ namespace LFramework
         {
             if (string.IsNullOrEmpty(path))
             {
-                Debug.LogError("[ResourcesLoader] LoadAsync failed: path is null or empty");
+                LogManager.Error("[ResourcesLoader] LoadAsync failed: path is null or empty");
                 return null;
             }
 
@@ -96,7 +96,7 @@ namespace LFramework
 
             if (request.asset == null)
             {
-                Debug.LogWarning($"[ResourcesLoader] LoadAsync failed: {path}");
+                LogManager.Warning($"[ResourcesLoader] LoadAsync failed: {path}");
                 return null;
             }
 

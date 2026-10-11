@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Events;
@@ -32,7 +32,7 @@ namespace LFramework
                     buildIndex = 0;
                 else
                 {
-                    Debug.LogWarning($"加载场景失败！索引 {buildIndex} 越界");
+                    LogManager.Warning($"加载场景失败！索引 {buildIndex} 越界");
                     return;
                 }
             }
@@ -51,7 +51,7 @@ namespace LFramework
                     buildIndex = SceneManager.sceneCountInBuildSettings - 1;
                 else
                 {
-                    Debug.LogWarning($"加载场景失败！索引 {buildIndex} 不能为负数");
+                    LogManager.Warning($"加载场景失败！索引 {buildIndex} 不能为负数");
                     return;
                 }
             }

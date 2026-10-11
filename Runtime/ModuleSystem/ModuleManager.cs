@@ -62,7 +62,7 @@ namespace LFramework
         {
             if (manifest == null)
             {
-                Debug.LogError("[ModuleManager] manifest 为 null，无法初始化模块。请在 GameLaunch Inspector 中赋值。");
+                LogManager.Error("[ModuleManager] manifest 为 null，无法初始化模块。请在 GameLaunch Inspector 中赋值。");
                 return;
             }
 
@@ -75,14 +75,14 @@ namespace LFramework
                 Type type = ResolveType(entry.typeName);
                 if (type == null)
                 {
-                    Debug.LogError($"[ModuleManager] 无法解析类型: {entry.typeName} (条目: \"{entry.displayName}\")，跳过。");
+                    LogManager.Error($"[ModuleManager] 无法解析类型: {entry.typeName} (条目: \"{entry.displayName}\")，跳过。");
                     continue;
                 }
 
                 object instance = CreateInstance(type);
                 if (instance == null)
                 {
-                    Debug.LogError($"[ModuleManager] 创建实例失败: {entry.typeName}，跳过。");
+                    LogManager.Error($"[ModuleManager] 创建实例失败: {entry.typeName}，跳过。");
                     continue;
                 }
 
@@ -94,16 +94,16 @@ namespace LFramework
                     try
                     {
                         await module.InitializeAsync();
-                        Debug.Log($"[ModuleManager] 模块已初始化 ({i + 1}/{sortedEntries.Count}): {module.DisplayName}");
+                        LogManager.Info($"[ModuleManager] 模块已初始化 ({i + 1}/{sortedEntries.Count}): {module.DisplayName}");
                     }
                     catch (Exception e)
                     {
-                        Debug.LogError($"[ModuleManager] 模块初始化异常: {entry.typeName}\n{e}");
+                        LogManager.Error($"[ModuleManager] 模块初始化异常: {entry.typeName}\n{e}");
                     }
                 }
                 else
                 {
-                    Debug.Log($"[ModuleManager] 模块已创建 (非 IModule): {type.Name}");
+                    LogManager.Info($"[ModuleManager] 模块已创建 (非 IModule): {type.Name}");
                 }
             }
 
@@ -114,14 +114,14 @@ namespace LFramework
             if (_monoManager != null)
             {
                 _monoManager.AddUpdateListener(OnModulesTick);
-                Debug.Log("[ModuleManager] Tick 派发已注册到 MonoManager.updateEvent。");
+                LogManager.Info("[ModuleManager] Tick 派发已注册到 MonoManager.updateEvent。");
             }
             else
             {
-                Debug.LogWarning("[ModuleManager] 未找到 MonoManager，ITickable 将不会被调用。请确保清单中包含 MonoManager。");
+                LogManager.Warning("[ModuleManager] 未找到 MonoManager，ITickable 将不会被调用。请确保清单中包含 MonoManager。");
             }
 
-            Debug.Log($"[ModuleManager] 全部模块初始化完成，共 {_modules.Count} 个 IModule + {_instancesByTypeName.Count - _modules.Count} 个非 IModule。");
+            LogManager.Info($"[ModuleManager] 全部模块初始化完成，共 {_modules.Count} 个 IModule + {_instancesByTypeName.Count - _modules.Count} 个非 IModule。");
         }
 
         /// <summary>按 typeName 获取已创建的模块实例</summary>
@@ -151,7 +151,7 @@ namespace LFramework
                 if (_modules[i] is ITickable tickable)
                 {
                     try { tickable.Tick(dt); }
-                    catch (Exception e) { Debug.LogError($"[ModuleManager] Tick 异常 ({_modules[i].DisplayName}):\n{e}"); }
+                    catch (Exception e) { LogManager.Error($"[ModuleManager] Tick 异常 ({_modules[i].DisplayName}):\n{e}"); }
                 }
             }
         }
@@ -172,7 +172,7 @@ namespace LFramework
             for (int i = _modules.Count - 1; i >= 0; i--)
             {
                 try { _modules[i].Dispose(); }
-                catch (Exception e) { Debug.LogError($"[ModuleManager] Dispose 异常 ({_modules[i].DisplayName}):\n{e}"); }
+                catch (Exception e) { LogManager.Error($"[ModuleManager] Dispose 异常 ({_modules[i].DisplayName}):\n{e}"); }
             }
             _modules.Clear();
             _instancesByTypeName.Clear();
@@ -237,7 +237,7 @@ namespace LFramework
             }
             catch (Exception e)
             {
-                Debug.LogError($"[ModuleManager] 无法创建 {type.FullName}:\n{e}");
+                LogManager.Error($"[ModuleManager] 无法创建 {type.FullName}:\n{e}");
                 return null;
             }
         }

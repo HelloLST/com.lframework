@@ -45,7 +45,7 @@ namespace LFramework
                 catch (Exception e)
                 {
                     // 单个监听器炸掉不应该连累其余监听器（修复前多播委托一炸全断）
-                    Debug.LogError($"[MonoManager] {phase} 监听器异常（已隔离）:\n{e}");
+                    LogManager.Error($"[MonoManager] {phase} 监听器异常（已隔离）:\n{e}");
                 }
             }
         }
@@ -77,7 +77,7 @@ namespace LFramework
         public void AddUpdateListener(UnityAction call)
         {
             if (call == null) return;
-            if (_updateListeners.Contains(call)) { Debug.LogWarning("[MonoManager] Update 监听器重复添加，已忽略"); return; }
+            if (_updateListeners.Contains(call)) { LogManager.Warning("[MonoManager] Update 监听器重复添加，已忽略"); return; }
             _updateListeners.Add(call);
         }
 
@@ -88,7 +88,7 @@ namespace LFramework
         public void AddFixedUpdateListener(UnityAction call)
         {
             if (call == null) return;
-            if (_fixedUpdateListeners.Contains(call)) { Debug.LogWarning("[MonoManager] FixedUpdate 监听器重复添加，已忽略"); return; }
+            if (_fixedUpdateListeners.Contains(call)) { LogManager.Warning("[MonoManager] FixedUpdate 监听器重复添加，已忽略"); return; }
             _fixedUpdateListeners.Add(call);
         }
 
@@ -99,7 +99,7 @@ namespace LFramework
         public void AddLateUpdateListener(UnityAction call)
         {
             if (call == null) return;
-            if (_lateUpdateListeners.Contains(call)) { Debug.LogWarning("[MonoManager] LateUpdate 监听器重复添加，已忽略"); return; }
+            if (_lateUpdateListeners.Contains(call)) { LogManager.Warning("[MonoManager] LateUpdate 监听器重复添加，已忽略"); return; }
             _lateUpdateListeners.Add(call);
         }
 

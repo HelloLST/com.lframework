@@ -42,7 +42,7 @@ namespace LFramework.Util
             var childList = new List<Transform>();
             if (parentObj == null)
             {
-                Debug.LogWarning("parentObj为null");
+                LogManager.Warning("parentObj为null");
                 return childList;
             }
             var childs = parentObj.GetComponentsInChildren<Transform>(includeInactive);
@@ -92,7 +92,7 @@ namespace LFramework.Util
             }
             catch (Exception ex)
             {
-                Debug.LogError("转换类型错误：" + ex);
+                LogManager.Error("转换类型错误：" + ex);
                 return default(T);
             }
         }
@@ -121,7 +121,7 @@ namespace LFramework.Util
             }
             if (_list.Count == 0)
             {
-                Debug.LogError("列表为空！");
+                LogManager.Error("列表为空！");
             }
             return _list;
         }

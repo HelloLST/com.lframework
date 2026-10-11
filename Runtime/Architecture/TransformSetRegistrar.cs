@@ -28,7 +28,7 @@ namespace LFramework.Architecture
         {
             if (_runtimeSet == null)
             {
-                Debug.LogWarning($"[TransformSetRegistrar] {name} 未指定运行时集合，登记被跳过", this);
+                LogManager.Warning($"[TransformSetRegistrar] {name} 未指定运行时集合，登记被跳过", name);
                 return;
             }
             _runtimeSet.Add(Target);

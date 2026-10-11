@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -30,7 +30,7 @@ namespace LFramework
         {
             if (string.IsNullOrEmpty(path))
             {
-                Debug.LogError("[AddressablesLoader] LoadAsync failed: path is null or empty");
+                LogManager.Error("[AddressablesLoader] LoadAsync failed: path is null or empty");
                 return null;
             }
 
@@ -54,7 +54,7 @@ namespace LFramework
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[AddressablesLoader] LoadAsync failed: {path} ({e.Message})");
+                    LogManager.Warning($"[AddressablesLoader] LoadAsync failed: {path} ({e.Message})");
                     _handles.Remove(path);
                     Addressables.Release(existing);
                     return null;
@@ -78,7 +78,7 @@ namespace LFramework
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[AddressablesLoader] LoadAsync failed: {path} ({e.Message})");
+                LogManager.Warning($"[AddressablesLoader] LoadAsync failed: {path} ({e.Message})");
                 _handles.Remove(path);
                 Addressables.Release(handle);
                 return null;
@@ -86,7 +86,7 @@ namespace LFramework
 
             if (handle.Status != AsyncOperationStatus.Succeeded)
             {
-                Debug.LogWarning($"[AddressablesLoader] LoadAsync failed: {path}");
+                LogManager.Warning($"[AddressablesLoader] LoadAsync failed: {path}");
                 // 失败请求：释放 handle，避免 AsyncOperation 资源泄漏
                 _handles.Remove(path);
                 Addressables.Release(handle);

@@ -66,13 +66,13 @@ namespace LFramework
             catch (SocketException e)
             {
                 _isRunning = false;
-                Debug.LogError($"UDPDevice: Failed to bind port {port}. Error: {e.Message}");
+                LogManager.Error($"UDPDevice: Failed to bind port {port}. Error: {e.Message}");
                 throw;
             }
             catch (Exception e)
             {
                 _isRunning = false;
-                Debug.LogError($"UDPDevice: Failed to initialize. Error: {e.Message}");
+                LogManager.Error($"UDPDevice: Failed to initialize. Error: {e.Message}");
                 throw;
             }
         }
@@ -120,7 +120,7 @@ namespace LFramework
             {
                 if (_isRunning && !_isDisposed)
                 {
-                    Debug.LogError($"UDPDevice: Receive thread error. {e.Message}");
+                    LogManager.Error($"UDPDevice: Receive thread error. {e.Message}");
                 }
             }
             finally
@@ -163,13 +163,13 @@ namespace LFramework
                         // 如果事件被触发但回调中没有处理，需要确保队列继续处理
                         if (_eventTriggerQueue.Count > 1000)
                         {
-                            Debug.LogWarning($"UDPDevice: Event queue size is large ({_eventTriggerQueue.Count}). " +
+                            LogManager.Warning($"UDPDevice: Event queue size is large ({_eventTriggerQueue.Count}). " +
                                 $"Consider consuming events faster.");
                         }
                     }
                     catch (Exception e)
                     {
-                        Debug.LogError($"UDPDevice: Error in DataReceived callback. {e.Message}");
+                        LogManager.Error($"UDPDevice: Error in DataReceived callback. {e.Message}");
                     }
                 }
             }
@@ -219,7 +219,7 @@ namespace LFramework
         {
             if (_isDisposed || _client == null)
             {
-                Debug.LogWarning("UDPDevice: Cannot send, device is not initialized or has been disposed.");
+                LogManager.Warning("UDPDevice: Cannot send, device is not initialized or has been disposed.");
                 return false;
             }
 
@@ -232,12 +232,12 @@ namespace LFramework
             }
             catch (FormatException)
             {
-                Debug.LogError($"UDPDevice: Invalid IP address format: {targetIP}");
+                LogManager.Error($"UDPDevice: Invalid IP address format: {targetIP}");
                 return false;
             }
             catch (Exception e)
             {
-                Debug.LogError($"UDPDevice: Failed to send UDP message. {e.Message}");
+                LogManager.Error($"UDPDevice: Failed to send UDP message. {e.Message}");
                 return false;
             }
         }
@@ -287,7 +287,7 @@ namespace LFramework
                 {
                     if (!_receiveThread.Join(500))
                     {
-                        Debug.LogWarning("UDPDevice: Receive thread did not exit gracefully within 500ms. " +
+                        LogManager.Warning("UDPDevice: Receive thread did not exit gracefully within 500ms. " +
                             "This may indicate the receive operation is blocked.");
                     }
                 }

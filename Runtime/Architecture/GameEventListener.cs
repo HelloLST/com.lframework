@@ -25,7 +25,7 @@ namespace LFramework.Architecture
         {
             if (_channel == null)
             {
-                Debug.LogWarning($"[GameEventListener] {name} 未指定事件通道，该监听器不会生效", this);
+                LogManager.Warning($"[GameEventListener] {name} 未指定事件通道，该监听器不会生效", name);
                 return;
             }
             _channel.Subscribe(OnEventRaised);

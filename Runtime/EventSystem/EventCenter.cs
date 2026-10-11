@@ -19,8 +19,8 @@ namespace LFramework
 
         private static void AddEventListenerInternal<T>(string eventName, T action) where T : Delegate
         {
-            if (action == null) { Debug.LogError("EventCenter: Cannot add null event listener for " + eventName); return; }
-            if (string.IsNullOrEmpty(eventName)) { Debug.LogError("EventCenter: Event name cannot be null or empty"); return; }
+            if (action == null) { LogManager.Error("EventCenter: Cannot add null event listener for " + eventName); return; }
+            if (string.IsNullOrEmpty(eventName)) { LogManager.Error("EventCenter: Event name cannot be null or empty"); return; }
             lock (_lock)
             {
                 var typeDict = GetOrCreateEventTypeDict(eventName);
@@ -30,7 +30,7 @@ namespace LFramework
                     var invocationList = existingDelegate.GetInvocationList();
                     if (Array.Exists(invocationList, d => d.Equals(action)))
                     {
-                        Debug.LogWarning("EventCenter: Duplicate listener for " + eventName);
+                        LogManager.Warning("EventCenter: Duplicate listener for " + eventName);
                         return;
                     }
                     typeDict[actionType] = Delegate.Combine(existingDelegate, action);
@@ -190,17 +190,17 @@ namespace LFramework
         {
             lock (_lock)
             {
-                Debug.Log("=== EventCenter Debug Info ===");
-                if (_eventDict.Count == 0) { Debug.Log("No events registered."); return; }
+                LogManager.Info("=== EventCenter Debug Info ===");
+                if (_eventDict.Count == 0) { LogManager.Info("No events registered."); return; }
                 foreach (var kvp in _eventDict)
                 {
-                    Debug.Log("Event: " + kvp.Key);
+                    LogManager.Info("Event: " + kvp.Key);
                     foreach (var tkvp in kvp.Value)
                     {
-                        Debug.Log("  Type: " + tkvp.Key.Name + ", Listeners: " + (tkvp.Value?.GetInvocationList().Length ?? 0));
+                        LogManager.Info("  Type: " + tkvp.Key.Name + ", Listeners: " + (tkvp.Value?.GetInvocationList().Length ?? 0));
                     }
                 }
-                Debug.Log("=== End EventCenter Debug Info ===");
+                LogManager.Info("=== End EventCenter Debug Info ===");
             }
         }
 

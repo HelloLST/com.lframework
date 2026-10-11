@@ -64,7 +64,7 @@ namespace LFramework
             //添加到已使用字典（O(1) 查找）；防止同一对象被重复 Spawn 时抛异常
             if (_usedObjects.ContainsKey(item.GameObject))
             {
-                Debug.LogError($"[ObjectPool] Spawn failed: 对象 {item.GameObject.name} 已在使用中，请先 Despawn");
+                LogManager.Error($"[ObjectPool] Spawn failed: 对象 {item.GameObject.name} 已在使用中，请先 Despawn");
             }
             else
             {

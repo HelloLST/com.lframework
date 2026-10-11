@@ -116,6 +116,11 @@ namespace LFramework
         private static System.Text.RegularExpressions.Regex _sanitizeCombinedRegex;
         private static bool _isSanitizeInitialized = false;
 
+        // 启动缓冲：LogManager 模块初始化前的日志先进缓冲、初始化时统一回放。
+        // 写日志不再通过 Instance 懒创建管理器（避免在模块清单外催生实例 + 退出阶段 NRE）—— Phase 5 / 5.4
+        private static readonly Queue<LogEntry> _startupBuffer = new Queue<LogEntry>();
+        private const int StartupBufferCapacity = 256;
+
         public static event Action<LogEntry> OnLogReceived;
         #endregion
 
@@ -245,13 +250,35 @@ namespace LFramework
             if (level < MinLevel) return;
             if (EnableSanitization) { message = Sanitize(message); stackTrace = Sanitize(stackTrace); }
             var entry = new LogEntry(level, message, stackTrace, tag);
-            var instance = Instance;
-            if (instance == null) return; // 退出阶段单例已销毁，避免 NRE
-            foreach (var writer in instance._writers) { try { writer.Write(entry); } catch { } }
+
+            // 不经 Instance 懒创建管理器（避免在模块清单外催生实例 + 退出阶段 NRE）：
+            // 未就绪时进入启动缓冲，InitializeAsync 时统一回放 —— Phase 5 / 5.4
+            if (!UnitySingleton<LogManager>.TryGetExisting(out var instance))
+            {
+                if (_startupBuffer.Count >= StartupBufferCapacity) _startupBuffer.Dequeue();
+                _startupBuffer.Enqueue(entry);
+                return;
+            }
+
+            WriteToWriters(instance, entry);
             try { OnLogReceived?.Invoke(entry); } catch { }
 
             // 远程上传（唯一上传通道；UploadLog 内部按 EnableUpload / UploadLevel 过滤）
             LogUploader.UploadLog(message, stackTrace, level);
+        }
+
+        private static void WriteToWriters(LogManager instance, LogEntry entry)
+        {
+            foreach (var writer in instance._writers) { try { writer.Write(entry); } catch { } }
+        }
+
+        /// <summary>回放启动缓冲（LogManager 模块初始化时调用一次）。</summary>
+        private void FlushStartupBuffer()
+        {
+            while (_startupBuffer.Count > 0)
+            {
+                WriteToWriters(this, _startupBuffer.Dequeue());
+            }
         }
 
         public static string Sanitize(string input)
@@ -323,7 +350,12 @@ namespace LFramework
         #region IModule 实现
 
         public string DisplayName => GetType().Name;
-        public UniTask InitializeAsync() => UniTask.CompletedTask;
+        public async UniTask InitializeAsync()
+        {
+            // 模块初始化即就绪：回放启动期缓冲的日志（Phase 5 / 5.4）
+            FlushStartupBuffer();
+            await UniTask.CompletedTask;
+        }
         public void Tick(float deltaTime)
         {
             if (_fileWriter != null && _fileWriter.NeedsFlush())

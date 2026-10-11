@@ -68,6 +68,19 @@ namespace LFramework
             _loader.ReleaseRef(path);
         }
 
+        /// <summary>
+        /// 以句柄方式钉住资源（Phase 5 / 5.6）：内部完成 Load + 显式引用 +1，
+        /// 句柄 Dispose 时归还——比手工 AddRef/ReleaseRef 配对更难漏。
+        /// 句柄释放后资源仍可能留在缓存（隐式持有），由容量/LRU 策略管理。
+        /// </summary>
+        public IResourceHandle Pin<T>(string path) where T : UnityEngine.Object
+        {
+            if (string.IsNullOrEmpty(path)) throw new ArgumentException("path 为空", nameof(path));
+            _loader.Load<T>(path);   // 确保已缓存（隐式持有 +1；已加载则为缓存命中）
+            _loader.AddRef(path);    // 句柄显式钉住 +1
+            return new ResourceHandle(this, path);
+        }
+
         public void ReleaseUnused()
         {
             _loader.ReleaseUnused();

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections.Generic;
 
 namespace LFramework
@@ -17,7 +17,7 @@ namespace LFramework
         {
             if (device == null)
             {
-                Debug.LogWarning("UDPDeviceAutoUpdater: Attempted to register null device.");
+                LogManager.Warning("UDPDeviceAutoUpdater: Attempted to register null device.");
                 return;
             }
 
@@ -57,7 +57,7 @@ namespace LFramework
                     }
                     catch (System.Exception e)
                     {
-                        Debug.LogError($"UDPDeviceAutoUpdater: Error updating device. {e.Message}");
+                        LogManager.Error($"UDPDeviceAutoUpdater: Error updating device. {e.Message}");
                     }
                 }
                 else

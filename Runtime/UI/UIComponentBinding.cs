@@ -62,7 +62,7 @@ namespace LFramework.UI
                 Transform node = FindNode(root, field.Name);
                 if (node == null)
                 {
-                    Debug.LogWarning($"[UIComponentBinding] 面板 {panel.GetType().Name} 未找到节点: {field.Name}", panel);
+                    LogManager.Warning($"[UIComponentBinding] 面板 {panel.GetType().Name} 未找到节点: {field.Name}", panel.name);
                     continue;
                 }
 
@@ -76,7 +76,7 @@ namespace LFramework.UI
                     value = node.GetComponent(fieldType);
                     if (value == null)
                     {
-                        Debug.LogWarning($"[UIComponentBinding] 节点 {field.Name} 上未找到组件: {fieldType.Name}", panel);
+                        LogManager.Warning($"[UIComponentBinding] 节点 {field.Name} 上未找到组件: {fieldType.Name}", panel.name);
                         continue;
                     }
                 }

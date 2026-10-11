@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UnityEngine;
 
 namespace LFramework
@@ -67,7 +67,7 @@ namespace LFramework
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[Localization] 格式化失败 key={m_Key}: {e.Message}");
+                    LogManager.Warning($"[Localization] 格式化失败 key={m_Key}: {e.Message}");
                     return data;
                 }
             }

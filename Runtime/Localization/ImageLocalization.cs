@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
@@ -154,7 +154,7 @@ namespace LFramework
                     await req.SendWebRequest();
                     if (req.result != UnityWebRequest.Result.Success)
                     {
-                        Debug.LogError($"[Localization] 加载网络图片失败: {req.error} ({url})");
+                        LogManager.Error($"[Localization] 加载网络图片失败: {req.error} ({url})");
                         return null;
                     }
 
@@ -169,7 +169,7 @@ namespace LFramework
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"[Localization] LoadNet 异常: {e}");
+                LogManager.Error($"[Localization] LoadNet 异常: {e}");
                 return null;
             }
         }

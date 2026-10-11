@@ -1,4 +1,4 @@
-using Cysharp.Threading.Tasks;
+﻿using Cysharp.Threading.Tasks;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -35,8 +35,8 @@ namespace LFramework.UI
         // 面板栈管理
         private static readonly Stack<Type> _panelStack = new Stack<Type>();
 
-        // 记录每个面板对应的资源路径，便于 ReleaseRef
-        private static readonly Dictionary<Type, string> _panelResourcePath = new Dictionary<Type, string>();
+        // 每个面板对应的资源句柄：获取即钉住，销毁面板 Dispose 归还（Phase 5 / 5.6 句柄化）
+        private static readonly Dictionary<Type, IResourceHandle> _panelHandles = new Dictionary<Type, IResourceHandle>();
 
         public static RectTransform GetLayer(UIPanelLayer layer)
         {
@@ -47,7 +47,8 @@ namespace LFramework.UI
         {
             _panelDic = new Dictionary<Type, UIPanelBase>();
             _panelStack.Clear();
-            _panelResourcePath.Clear();
+            foreach (var handle in _panelHandles.Values) handle.Dispose();
+            _panelHandles.Clear();
             GameObject UIRoot = Instantiate(ResourcesManager.Instance.Load<GameObject>(UISettings.RootPrefabPath));
             Canvas = UIRoot.GetComponentInChildren<Canvas>();
             eventSystem = UIRoot.GetComponentInChildren<EventSystem>();
@@ -62,7 +63,7 @@ namespace LFramework.UI
 
         /// <summary>
         /// 打开面板（同步加载），并推入面板栈
-       // 注意：Addressables 后端不支持同步加载，使用 Addressables 时请改用 OpenAsync
+        /// 注意：Addressables 后端不支持同步加载，使用 Addressables 时请改用 OpenAsync
         /// </summary>
         public void Open<T>(object data = null) where T : UIPanelBase
         {
@@ -101,7 +102,7 @@ namespace LFramework.UI
         {
             if (_panelStack.Count <= 1)
             {
-                Debug.LogWarning("[UIManager] BackAsync() failed: no previous panel in stack");
+                LogManager.Warning("[UIManager] BackAsync() failed: no previous panel in stack");
                 return;
             }
 
@@ -159,7 +160,7 @@ namespace LFramework.UI
 
             if (!found)
             {
-                Debug.LogError($"[UIManager] BackTo<{targetType.Name}> failed: panel not found in stack");
+                LogManager.Error($"[UIManager] BackTo<{targetType.Name}> failed: panel not found in stack");
                 return;
             }
 
@@ -189,7 +190,7 @@ namespace LFramework.UI
             }
             else
             {
-                Debug.LogError($"场景中未找到{typeof(T).Name}面板!!!");
+                LogManager.Error($"场景中未找到{typeof(T).Name}面板!!!");
             }
         }
 
@@ -219,7 +220,7 @@ namespace LFramework.UI
             }
             else
             {
-                Debug.LogError($"场景中未找到{typeof(T).Name}面板");
+                LogManager.Error($"场景中未找到{typeof(T).Name}面板");
             }
             return default(T);
         }
@@ -228,7 +229,7 @@ namespace LFramework.UI
         {
             if (!_panelDic.TryGetValue(typeof(T), out UIPanelBase panel))
             {
-                Debug.LogError($"场景中未找到{typeof(T).Name}面板");
+                LogManager.Error($"场景中未找到{typeof(T).Name}面板");
             }
             else
             {
@@ -242,16 +243,15 @@ namespace LFramework.UI
             Type panelType = panel.GetType();
             panel.OnUIDisable();
             panel.OnUIDestroy();
-            EventCenter.TriggerEvent($"UIManager.PanelDestroy/{panelType.Name}", panel);
+            EventCenter.TriggerEvent(UIEventKeys.PanelDestroy(panelType.Name), panel);
             _panelDic.Remove(panelType);
             RemoveTypeFromStack(panelType);
 
-            // 释放对应资源引用：先归还实例的显式引用，再归还 Load 的隐式引用（P0-1 所有权语义）
-            if (_panelResourcePath.TryGetValue(panelType, out string path))
+            // 释放句柄：归还面板对预制体的显式引用（Phase 5 / 5.6 句柄化）
+            if (_panelHandles.TryGetValue(panelType, out var handle))
             {
-                ResourcesManager.Instance.ReleaseRef(path);
-                ResourcesManager.Instance.Release(path);
-                _panelResourcePath.Remove(panelType);
+                handle.Dispose();
+                _panelHandles.Remove(panelType);
             }
         }
 
@@ -264,7 +264,8 @@ namespace LFramework.UI
             }
             _panelDic.Clear();
             _panelStack.Clear();
-            _panelResourcePath.Clear();
+            foreach (var handle in _panelHandles.Values) handle.Dispose();
+            _panelHandles.Clear();
             PanelList.Clear();
         }
         #region 内部实现
@@ -293,7 +294,7 @@ namespace LFramework.UI
         {
             if (panel == null) return UniTask.CompletedTask;
             panel.OnUIDisable();
-            EventCenter.TriggerEvent($"UIManager.PanelClose/{panel.GetType().Name}", panel);
+            EventCenter.TriggerEvent(UIEventKeys.PanelClose(panel.GetType().Name), panel);
             if (removeFromStack)
             {
                 RemoveTypeFromStack(panel.GetType());
@@ -345,7 +346,7 @@ namespace LFramework.UI
             }
             // 显示完成：推进状态并广播打开完成事件
             panel.State = PanelState.Open;
-            EventCenter.TriggerEvent($"UIManager.PanelOpen/{panel.GetType().Name}", panel);
+            EventCenter.TriggerEvent(UIEventKeys.PanelOpen(panel.GetType().Name), panel);
         }
 
         private async UniTask<T> OpenInternalAsync<T>(object data, bool pushToStack, bool useSyncLoad) where T : UIPanelBase
@@ -361,19 +362,20 @@ namespace LFramework.UI
                 return panel as T;
             }
 
-            T newPanel = await ClonePanelAsync<T>(useSyncLoad);
-            if (newPanel == null) return null;
+            var cloned = await ClonePanelAsync<T>(useSyncLoad);
+            if (cloned.Panel == null)
+            {
+                cloned.Handle?.Dispose();
+                return null;
+            }
 
             // 并发保护：异步加载期间可能已有另一路注册了同类型面板，此时复用已存在实例
             if (_panelDic.ContainsKey(typeof(T)))
             {
                 T existing = _panelDic[typeof(T)] as T;
-                // 本次克隆未被采用：撤销其冗余资源引用（已有实例那一路维护了自身引用），并销毁克隆实例
-                if (_panelResourcePath.TryGetValue(typeof(T), out string clonedPath))
-                {
-                    ResourcesManager.Instance.ReleaseRef(clonedPath);
-                }
-                Destroy(newPanel.gameObject);
+                // 本次克隆未被采用：归还其句柄引用并销毁克隆实例（已有实例那一路维护了自身句柄）
+                cloned.Handle.Dispose();
+                Destroy(cloned.Panel.gameObject);
 
                 if (pushToStack)
                 {
@@ -383,21 +385,22 @@ namespace LFramework.UI
                 await ShowExistingPanel(existing, data, playAnim: true, reinitData: true);
                 return existing;
             }
-            _panelDic.Add(typeof(T), newPanel);
+            _panelDic.Add(typeof(T), cloned.Panel);
+            _panelHandles[typeof(T)] = cloned.Handle;
 
             if (pushToStack)
             {
                 RemoveTypeFromStack(typeof(T));
                 _panelStack.Push(typeof(T));
             }
-            newPanel.OnUIAwake();
+            cloned.Panel.OnUIAwake();
             await UniTask.Yield();
-            newPanel.OnUIStart();
-            await ShowExistingPanel(newPanel, data, playAnim: true, reinitData: true);
-            return newPanel;
+            cloned.Panel.OnUIStart();
+            await ShowExistingPanel(cloned.Panel, data, playAnim: true, reinitData: true);
+            return cloned.Panel;
         }
 
-        private async UniTask<T> ClonePanelAsync<T>(bool useSyncLoad) where T : UIPanelBase
+        private async UniTask<(T Panel, IResourceHandle Handle)> ClonePanelAsync<T>(bool useSyncLoad) where T : UIPanelBase
         {
             var panelRootPath = UISettings.PanelPrefabDir;
             var panelSubPath = $"{typeof(T).Name}";
@@ -415,13 +418,12 @@ namespace LFramework.UI
 
             if (Obj == null)
             {
-                Debug.LogError($"该路径下:{panelPath}未查找到此面板:{typeof(T).Name}");
-                return null;
+                LogManager.Error($"该路径下:{panelPath}未查找到此面板:{typeof(T).Name}");
+                return (null, null);
             }
 
-            // 引用计数：实例化即 AddRef，销毁面板时 ReleaseRef
-            ResourcesManager.Instance.AddRef(panelPath);
-            _panelResourcePath[typeof(T)] = panelPath;
+            // 引用计数：以句柄钉住（Load + 显式引用），销毁面板时 Dispose 归还（Phase 5 / 5.6）
+            var handle = ResourcesManager.Instance.Pin<GameObject>(panelPath);
 
             // 解析 [UILayer] 特性；未标注或读取失败时默认到 Normal 层
             var layerAttr = typeof(T).GetCustomAttribute<UILayerAttribute>(inherit: false);
@@ -430,7 +432,7 @@ namespace LFramework.UI
             var go = GameObject.Instantiate<GameObject>(Obj, layer);
             go.name = typeof(T).Name;
             var newPanel = go.GetOrAddComponent<T>();
-            return newPanel;
+            return (newPanel, handle);
         }
 
         #endregion

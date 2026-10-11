@@ -25,12 +25,12 @@ namespace LFramework
         {
             if (state == null)
             {
-                Debug.LogError("The state you went to add is null");
+                LogManager.Error("The state you went to add is null");
                 return;
             }
             if (states.ContainsKey(state.ID))
             {
-                Debug.LogError("The state " + state.ID + " you want to add has already been added.");
+                LogManager.Error("The state " + state.ID + " you want to add has already been added.");
                 return;
             }
             state.fsm = this;
@@ -42,12 +42,12 @@ namespace LFramework
         {
             if (state == null)
             {
-                Debug.LogError("The state you went to Delete is null");
+                LogManager.Error("The state you went to Delete is null");
                 return;
             }
             if (!states.ContainsKey(state.ID))
             {
-                Debug.LogError("The state " + state.ID + " you want to Delete is not exit.");
+                LogManager.Error("The state " + state.ID + " you want to Delete is not exit.");
                 return;
             }
             states.Remove(state.ID);
@@ -58,25 +58,25 @@ namespace LFramework
         {
             if (IsDefault(trans))
             {
-                Debug.LogError("NullTransition is not allowed for a real transition.");
+                LogManager.Error("NullTransition is not allowed for a real transition.");
                 return;
             }
             if (currentState == null)
             {
-                Debug.LogError("FSM PerformTransition failed: 状态机尚未启动，请先调用 Start()");
+                LogManager.Error("FSM PerformTransition failed: 状态机尚未启动，请先调用 Start()");
                 return;
             }
 
             TStateId id = currentState.GetOutState(trans);// 判断发生这个条件的时候是否可发生转换
             if (IsDefault(id))
             {
-                Debug.Log("Transition is not tobe happend!没有符合条件的转换");
+                LogManager.Info("Transition is not tobe happend!没有符合条件的转换");
                 return;
             }
 
             if (!states.TryGetValue(id, out FSMState<TStateId, TTransition> state) || state == null)
             {
-                Debug.LogError($"FSM PerformTransition failed: 目标状态 {id} 未注册");
+                LogManager.Error($"FSM PerformTransition failed: 目标状态 {id} 未注册");
                 return;
             }
 
@@ -95,7 +95,7 @@ namespace LFramework
             }
             else
             {
-                Debug.LogError("The state" + id + "is not exit in the fsm.");
+                LogManager.Error("The state" + id + "is not exit in the fsm.");
             }
         }
 

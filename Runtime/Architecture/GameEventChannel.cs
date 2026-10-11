@@ -39,7 +39,7 @@ namespace LFramework.Architecture
                 catch (Exception e)
                 {
                     // 单个监听器炸掉不应该连累其余监听器，把异常就地拦下并定位到资产
-                    Debug.LogError($"[EventChannel:{name}] 监听器抛出异常：{e}", this);
+                    LogManager.Error($"[EventChannel:{name}] 监听器抛出异常：{e}", name);
                 }
             }
         }
@@ -93,7 +93,7 @@ namespace LFramework.Architecture
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError($"[EventChannel:{name}] 监听器抛出异常：{e}", this);
+                    LogManager.Error($"[EventChannel:{name}] 监听器抛出异常：{e}", name);
                 }
             }
         }

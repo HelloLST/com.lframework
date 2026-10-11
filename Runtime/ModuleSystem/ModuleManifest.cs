@@ -129,13 +129,13 @@ namespace LFramework
             {
                 if (string.IsNullOrEmpty(e.typeName))
                 {
-                    Debug.LogError($"[ModuleManifest] 条目 \"{e.displayName}\" 的 typeName 为空，跳过。");
+                    LogManager.Error($"[ModuleManifest] 条目 \"{e.displayName}\" 的 typeName 为空，跳过。");
                     continue;
                 }
                 if (!byName.ContainsKey(e.typeName))
                     byName[e.typeName] = e;
                 else
-                    Debug.LogError($"[ModuleManifest] typeName 重复: {e.typeName}，仅保留第一个。");
+                    LogManager.Error($"[ModuleManifest] typeName 重复: {e.typeName}，仅保留第一个。");
             }
 
             // 入度
@@ -162,7 +162,7 @@ namespace LFramework
                     // 依赖的模块必须存在于清单中
                     if (!byName.ContainsKey(dep))
                     {
-                        Debug.LogError($"[ModuleManifest] \"{entry.displayName}\" 依赖的 \"{dep}\" 不在清单中，忽略该依赖。");
+                        LogManager.Error($"[ModuleManifest] \"{entry.displayName}\" 依赖的 \"{dep}\" 不在清单中，忽略该依赖。");
                         continue;
                     }
 
@@ -211,7 +211,7 @@ namespace LFramework
                 {
                     if (kvp.Value > 0) cyclic.Add(kvp.Key);
                 }
-                Debug.LogError($"[ModuleManifest] 检测到循环依赖: {string.Join(", ", cyclic)}\n回退为清单顺序。");
+                LogManager.Error($"[ModuleManifest] 检测到循环依赖: {string.Join(", ", cyclic)}\n回退为清单顺序。");
                 // 按清单原始顺序返回（去重），保证回退顺序也是确定的（Phase 1 / P0-3 修复）
                 var fallback = new List<ModuleEntry>(byName.Count);
                 var seen = new HashSet<string>();

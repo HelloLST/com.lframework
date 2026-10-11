@@ -79,7 +79,7 @@ namespace LFramework
 
         public void PlayBGM(AudioClip bgm, bool loop = true)
         {
-            if (bgm == null) { Debug.LogWarning("[AudioManager] PlayBGM failed: clip is null"); return; }
+            if (bgm == null) { LogManager.Warning("[AudioManager] PlayBGM failed: clip is null"); return; }
             _bgmSource.clip = bgm;
             _bgmSource.loop = loop;
             _bgmSource.volume = _bgmVolume;
@@ -114,7 +114,7 @@ namespace LFramework
 
         public void PlayBGS(AudioClip bgs, bool loop = true)
         {
-            if (bgs == null) { Debug.LogWarning("[AudioManager] PlayBGS failed: clip is null"); return; }
+            if (bgs == null) { LogManager.Warning("[AudioManager] PlayBGS failed: clip is null"); return; }
             _bgsSource.clip = bgs;
             _bgsSource.loop = loop;
             _bgsSource.volume = _bgsVolume;
@@ -131,7 +131,7 @@ namespace LFramework
 
         public void PlayVoice(AudioClip voice)
         {
-            if (voice == null) { Debug.LogWarning("[AudioManager] PlayVoice failed: clip is null"); return; }
+            if (voice == null) { LogManager.Warning("[AudioManager] PlayVoice failed: clip is null"); return; }
             _voiceSource.Stop();
             _voiceSource.clip = voice;
             _voiceSource.volume = _voiceVolume;
@@ -148,7 +148,7 @@ namespace LFramework
 
         public void PlaySound(AudioClip sound)
         {
-            if (sound == null) { Debug.LogWarning("[AudioManager] PlaySound failed: clip is null"); return; }
+            if (sound == null) { LogManager.Warning("[AudioManager] PlaySound failed: clip is null"); return; }
             GameObject go = GetAudioObjectFromPool(_sfxPool2D, SFX_CLIP_2D_NAME);
             AudioSource source = GetOrAddAudioSource(go);
             source.clip = sound; source.loop = false; source.spatialBlend = 0f; source.volume = _sfxVolume;

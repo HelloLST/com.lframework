@@ -143,12 +143,12 @@ namespace LFramework.Util
                 }
                 else
                 {
-                    Debug.LogWarning("str length not 3");
+                    LogManager.Warning("str length not 3");
                 }
             }
             else
             {
-                Debug.LogWarning("str null");
+                LogManager.Warning("str null");
             }
             return ret;
         }

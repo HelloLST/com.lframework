@@ -52,7 +52,7 @@ namespace LFramework
         {
             if (prefab == null)
             {
-                Debug.LogError("[ObjectPoolsManager] Spawn failed: prefab is null");
+                LogManager.Error("[ObjectPoolsManager] Spawn failed: prefab is null");
                 return null;
             }
 

@@ -28,12 +28,12 @@ namespace LFramework
         {
             if (IsDefault(trans) || IsDefault(id))
             {
-                Debug.LogError("Transition or stateid is null!!!");
+                LogManager.Error("Transition or stateid is null!!!");
                 return;
             }
             if (map.ContainsKey(trans))
             {
-                Debug.LogError("State" + id + " is already has transition" + trans);
+                LogManager.Error("State" + id + " is already has transition" + trans);
                 return;
             }
             map.Add(trans, id);
@@ -44,7 +44,7 @@ namespace LFramework
         {
             if (!map.ContainsKey(trans))
             {
-                Debug.LogWarning("The transition " + trans + "you want to delete is not exit in map!!!");
+                LogManager.Warning("The transition " + trans + "you want to delete is not exit in map!!!");
                 return;
             }
             map.Remove(trans);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -61,6 +61,16 @@ namespace LFramework
             }
         }
 
+        /// <summary>
+        /// 仅获取"已存在"的实例，绝不创建（Phase 5 / 5.4）：供日志这类基础设施使用，
+        /// 写日志不应在模块清单外催生管理器实例。Unity 假 null 视为不存在。
+        /// </summary>
+        public static bool TryGetExisting(out T existing)
+        {
+            existing = _instance;
+            return existing != null;
+        }
+
         private static T FindOrCreateInstance()
         {
             // 仅查找激活的对象，符合Unity单例通常的使用习惯
@@ -77,7 +87,7 @@ namespace LFramework
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"Failed to create singleton instance of {typeof(T).Name}: {ex.Message}");
+                    LogManager.Error($"Failed to create singleton instance of {typeof(T).Name}: {ex.Message}");
                 }
             }
             else
@@ -111,7 +121,7 @@ namespace LFramework
                 {
                     _isDuplicate = true;
                     Destroy(gameObject);
-                    Debug.Log($"[UnitySingleton] Duplicate instance of {typeof(T).Name} detected. Destroying {gameObject.name}");
+                    LogManager.Info($"[UnitySingleton] Duplicate instance of {typeof(T).Name} detected. Destroying {gameObject.name}");
                     return;
                 }
             }

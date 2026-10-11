@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
@@ -77,7 +77,7 @@ namespace LFramework
         {
             if (!isLoadCompleted)
             {
-                Debug.LogWarning($"[Localization] 配置表尚未加载，切换到 {language} 后字典为空。请先调用 LoadConfigAsync / InitializeAsync。");
+                LogManager.Warning($"[Localization] 配置表尚未加载，切换到 {language} 后字典为空。请先调用 LoadConfigAsync / InitializeAsync。");
             }
 
             m_Language = language;
@@ -88,7 +88,7 @@ namespace LFramework
             }
             else
             {
-                Debug.LogWarning($"[Localization] 语言 {m_Language} 未在配置表中找到，回退为空字典");
+                LogManager.Warning($"[Localization] 语言 {m_Language} 未在配置表中找到，回退为空字典");
                 m_CurrentTable = new Dictionary<string, string>();
             }
 
@@ -103,7 +103,7 @@ namespace LFramework
             string filePath = Path.Combine(Application.streamingAssetsPath, configName);
             if (!File.Exists(filePath))
             {
-                Debug.LogError($"[Localization] 配置文件不存在: {filePath}");
+                LogManager.Error($"[Localization] 配置文件不存在: {filePath}");
                 return;
             }
 
@@ -112,7 +112,7 @@ namespace LFramework
                 var parsed = ParseConfig(filePath);
                 if (parsed == null)
                 {
-                    Debug.LogError($"[Localization] 配置文件解析失败（缺少语言列）: {filePath}");
+                    LogManager.Error($"[Localization] 配置文件解析失败（缺少语言列）: {filePath}");
                     return;
                 }
                 m_LanguageTable = parsed;
@@ -120,7 +120,7 @@ namespace LFramework
             }
             catch (Exception e)
             {
-                Debug.LogError($"[Localization] 读取 JSON 失败: {e}");
+                LogManager.Error($"[Localization] 读取 JSON 失败: {e}");
             }
         }
 
@@ -130,7 +130,7 @@ namespace LFramework
             string filePath = Path.Combine(Application.streamingAssetsPath, configName);
             if (!File.Exists(filePath))
             {
-                Debug.LogError($"[Localization] 配置文件不存在: {filePath}（请先通过菜单 LFramework/Localization/导出 Excel 到 JSON 生成）");
+                LogManager.Error($"[Localization] 配置文件不存在: {filePath}（请先通过菜单 LFramework/Localization/导出 Excel 到 JSON 生成）");
                 return;
             }
 
@@ -139,7 +139,7 @@ namespace LFramework
                 var parsed = await UniTask.RunOnThreadPool(() => ParseConfig(filePath));
                 if (parsed == null)
                 {
-                    Debug.LogError($"[Localization] 配置文件解析失败（缺少语言列）: {filePath}");
+                    LogManager.Error($"[Localization] 配置文件解析失败（缺少语言列）: {filePath}");
                     return;
                 }
 
@@ -148,7 +148,7 @@ namespace LFramework
             }
             catch (Exception e)
             {
-                Debug.LogError($"[Localization] 异步读取 JSON 失败: {e}");
+                LogManager.Error($"[Localization] 异步读取 JSON 失败: {e}");
             }
         }
 
@@ -166,7 +166,7 @@ namespace LFramework
             }
             catch (Exception e)
             {
-                Debug.LogError($"[Localization] JSON 解析失败: {e.Message}");
+                LogManager.Error($"[Localization] JSON 解析失败: {e.Message}");
                 return null;
             }
 
@@ -196,7 +196,7 @@ namespace LFramework
 
             if (result.Count == 0)
             {
-                Debug.LogError("[Localization] 配置文件中未识别到任何语言键，请使用语言枚举名（Chinese / English ...）");
+                LogManager.Error("[Localization] 配置文件中未识别到任何语言键，请使用语言枚举名（Chinese / English ...）");
                 return null;
             }
             return result;
@@ -207,13 +207,13 @@ namespace LFramework
         {
             if (m_CurrentTable == null)
             {
-                Debug.LogWarning($"[Localization] 当前语言字典未初始化，返回 key: {key}");
+                LogManager.Warning($"[Localization] 当前语言字典未初始化，返回 key: {key}");
                 return key;
             }
 
             if (!m_CurrentTable.TryGetValue(key, out string data))
             {
-                Debug.LogWarning($"[Localization] key 不存在: {key}");
+                LogManager.Warning($"[Localization] key 不存在: {key}");
                 return key;
             }
             return data;
