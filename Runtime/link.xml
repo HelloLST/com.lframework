@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  防托管裁剪：ModuleManager 以字符串 typeName（ModuleManifest SO 清单）反射解析模块类型，
+  协议反序列化（Newtonsoft）与 GetProperty("Instance") 同样依赖反射。
+  链接器静态分析看不见这些引用，IL2CPP + Managed Stripping 下
+  "只在清单里出现的模块类型"可能被整类裁掉。
+  代价：LFramework 程序集整体不被裁剪（包体略增）。优先正确性，接受该代价。
+-->
+<linker>
+  <assembly fullname="LFramework" preserve="all" />
+</linker>
