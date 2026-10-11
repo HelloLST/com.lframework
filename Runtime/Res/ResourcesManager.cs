@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -127,7 +127,6 @@ namespace LFramework
 
         public string DisplayName => GetType().Name;
         public UniTask InitializeAsync() => UniTask.CompletedTask;
-        public void Tick(float deltaTime) { }
         public void Dispose() => ReleaseAll();
 
         #endregion

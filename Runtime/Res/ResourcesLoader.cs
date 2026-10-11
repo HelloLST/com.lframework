@@ -1,8 +1,7 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
-using UnityEngine.Events;
 using Cysharp.Threading.Tasks;
 
 namespace LFramework
@@ -16,6 +15,7 @@ namespace LFramework
     ///      的资源不会被容量淘汰（强制卸载会破坏使用中的贴图/音频等资产）。
     ///   3. 容量上限是硬约束：超限时淘汰最久未使用的可安全回收项；若全部不可安全回收，
     ///      允许暂时超限，绝不允许清理循环无限自旋。
+    /// Phase 5 / 5.3：清理与卸载改 UniTask 驱动，不再依赖 MonoManager 协程（本类已与 MonoManager 解耦）。
     /// </summary>
     public class ResourcesLoader : IResourceLoader
     {
@@ -25,7 +25,7 @@ namespace LFramework
 
         private int _maxCacheCount = 100;
         private float _autoCleanupInterval = 60f;
-        private Coroutine _autoCleanupCoroutine;
+        private CancellationTokenSource _cleanupCts;
 
         public ResourcesLoader()
         {
@@ -112,14 +112,14 @@ namespace LFramework
 
         public void UnloadUnusedAssets(Action callback = null)
         {
-            MonoManager.Instance.StartCoroutine(UnloadUnusedAssetsCoroutine(callback));
+            UnloadUnusedAssetsAsync(callback).Forget();
         }
 
-        private IEnumerator UnloadUnusedAssetsCoroutine(Action callback)
+        private async UniTaskVoid UnloadUnusedAssetsAsync(Action callback)
         {
             ReleaseUnused();
             AsyncOperation asyncOp = Resources.UnloadUnusedAssets();
-            yield return new WaitUntil(() => asyncOp.isDone);
+            await UniTask.WaitUntil(() => asyncOp.isDone);
             callback?.Invoke();
         }
 
@@ -273,16 +273,16 @@ namespace LFramework
 
         private void StartAutoCleanup()
         {
-            if (_autoCleanupCoroutine != null)
-                MonoManager.Instance.StopCoroutine(_autoCleanupCoroutine);
-            _autoCleanupCoroutine = MonoManager.Instance.StartCoroutine(AutoCleanupCoroutine());
+            StopAutoCleanup();
+            _cleanupCts = new CancellationTokenSource();
+            AutoCleanupLoop(_cleanupCts.Token).Forget();
         }
 
-        private IEnumerator AutoCleanupCoroutine()
+        private async UniTaskVoid AutoCleanupLoop(CancellationToken ct)
         {
             while (true)
             {
-                yield return new WaitForSeconds(_autoCleanupInterval);
+                await UniTask.Delay(TimeSpan.FromSeconds(_autoCleanupInterval), DelayType.DeltaTime, PlayerLoopTiming.Update, ct);
                 ReleaseUnused();
 
                 // 容量收紧：EvictLRU 返回 false 说明没有可安全淘汰的项，
@@ -297,10 +297,11 @@ namespace LFramework
 
         public void StopAutoCleanup()
         {
-            if (_autoCleanupCoroutine != null)
+            if (_cleanupCts != null)
             {
-                MonoManager.Instance.StopCoroutine(_autoCleanupCoroutine);
-                _autoCleanupCoroutine = null;
+                _cleanupCts.Cancel();
+                _cleanupCts.Dispose();
+                _cleanupCts = null;
             }
         }
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -88,7 +88,7 @@ namespace LFramework
     /// 配置规则：启动时由 LogSettingsManager.Load() 从 ScriptableObject 注入；运行时 SetXxx 仅本次会话有效，不持久化。
     /// 想持久化请通过编辑器面板修改 LogSettingsAsset。
     /// </summary>
-    public class LogManager : UnitySingleton<LogManager>, IModule
+    public class LogManager : UnitySingleton<LogManager>, IModule, ITickable
     {
         #region 配置（只读公开 + 受控写入）
         public static LogLevel MinLevel { get; private set; } = LogLevel.Debug;
@@ -382,69 +382,70 @@ namespace LFramework
         private static void StartUpload()
         {
             if (_isUploading) return;
-            var mono = MonoManager.Instance;
-            if (mono != null) mono.StartCoroutine(UploadCoroutine());
+            UploadLoop().Forget();
         }
 
-        private static IEnumerator UploadCoroutine()
+        /// <summary>上传主循环（UniTask 驱动；失败原地指数退避重试，Phase 5 / 5.3 去协程）。</summary>
+        private static async UniTaskVoid UploadLoop()
         {
-            if (_isUploading) yield break;
+            if (_isUploading) return;
             _isUploading = true;
-
-            List<string> batch = new List<string>();
-            lock (_lockObj) { while (_pendingLogs.Count > 0 && batch.Count < 10) batch.Add(_pendingLogs.Dequeue()); }
-            if (batch.Count == 0) { _isUploading = false; yield break; }
-
-            string content = string.Join("\n", batch);
-            bool success = false;
-
-            if (Type == ServerType.HTTP) yield return UploadHttp(content, r => success = r);
-            else yield return UploadWebDAV(content, r => success = r);
-
-            if (!success)
+            try
             {
-                _consecutiveFailures++;
-                if (_consecutiveFailures > MAX_RETRIES)
+                while (true)
                 {
-                    // 连续失败超过上限：丢弃该批日志并重置，避免队列无限膨胀
-                    Debug.LogError($"[LogUploader] 连续上传失败 {MAX_RETRIES} 次，丢弃 {batch.Count} 条日志");
+                    List<string> batch = new List<string>();
+                    lock (_lockObj) { while (_pendingLogs.Count > 0 && batch.Count < 10) batch.Add(_pendingLogs.Dequeue()); }
+                    if (batch.Count == 0) return;
+
+                    string content = string.Join("\n", batch);
+                    bool success = Type == ServerType.HTTP
+                        ? await UploadHttpAsync(content)
+                        : await UploadWebDAVAsync(content);
+
+                    if (!success)
+                    {
+                        _consecutiveFailures++;
+                        if (_consecutiveFailures > MAX_RETRIES)
+                        {
+                            // 连续失败超过上限：丢弃该批日志并重置，避免队列无限膨胀
+                            Debug.LogError($"[LogUploader] 连续上传失败 {MAX_RETRIES} 次，丢弃 {batch.Count} 条日志");
+                            _consecutiveFailures = 0;
+                            _retryDelay = BASE_RETRY_DELAY;
+                            return;
+                        }
+
+                        // 失败重入队 + 指数退避后原地重试
+                        lock (_lockObj) { foreach (var log in batch) _pendingLogs.Enqueue(log); }
+                        Debug.LogWarning($"[LogUploader] 上传失败，{_retryDelay:0.#}s 后重试");
+                        await UniTask.Delay(TimeSpan.FromSeconds(_retryDelay));
+                        _retryDelay = Mathf.Min(_retryDelay * 2, MAX_RETRY_DELAY);
+                        continue;
+                    }
+
+                    // 上传成功：重置退避状态
                     _consecutiveFailures = 0;
                     _retryDelay = BASE_RETRY_DELAY;
-                    _isUploading = false;
-                    yield break;
+                    Debug.Log($"[LogUploader] 上传成功: {batch.Count} 条");
                 }
-
-                // 失败重入队 + 指数退避后主动重试
-                lock (_lockObj) { foreach (var log in batch) _pendingLogs.Enqueue(log); }
-                Debug.LogWarning($"[LogUploader] 上传失败，{_retryDelay:0.#}s 后重试");
-                yield return new WaitForSeconds(_retryDelay);
-                _retryDelay = Mathf.Min(_retryDelay * 2, MAX_RETRY_DELAY);
-                _isUploading = false;
-                StartUpload();
-                yield break;
             }
-
-            // 上传成功：重置退避状态
-            _consecutiveFailures = 0;
-            _retryDelay = BASE_RETRY_DELAY;
-            Debug.Log($"[LogUploader] 上传成功: {batch.Count} 条");
-            _isUploading = false;
+            finally { _isUploading = false; }
         }
 
-        private static IEnumerator UploadHttp(string content, Action<bool> callback)
+        private static async UniTask<bool> UploadHttpAsync(string content)
         {
-            if (string.IsNullOrEmpty(UploadUrl)) { callback?.Invoke(false); yield break; }
+            if (string.IsNullOrEmpty(UploadUrl)) return false;
             byte[] bodyData = Encoding.UTF8.GetBytes(content);
             var request = new UnityEngine.Networking.UnityWebRequest(UploadUrl, "POST") { timeout = ConnectionTimeout * 3 };
             request.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyData);
             request.SetRequestHeader("Content-Type", "text/plain; charset=utf-8");
-            yield return request.SendWebRequest();
-            callback?.Invoke(request.result == UnityEngine.Networking.UnityWebRequest.Result.Success);
+            await request.SendWebRequest();
+            return request.result == UnityEngine.Networking.UnityWebRequest.Result.Success;
         }
 
-        private static IEnumerator UploadWebDAV(string content, Action<bool> callback)
+        private static async UniTask<bool> UploadWebDAVAsync(string content)
         {
-            if (string.IsNullOrEmpty(UploadUrl)) { callback?.Invoke(false); yield break; }
+            if (string.IsNullOrEmpty(UploadUrl)) return false;
             string fileName = $"log_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
             string url = $"{UploadUrl.TrimEnd('/')}/GameLogs/{fileName}";
             byte[] bodyData = Encoding.UTF8.GetBytes(content);
@@ -452,29 +453,29 @@ namespace LFramework
             request.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyData);
             if (!string.IsNullOrEmpty(Username)) { string auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Username}:{Password}")); request.SetRequestHeader("Authorization", $"Basic {auth}"); }
             request.SetRequestHeader("Content-Type", "application/octet-stream");
-            yield return request.SendWebRequest();
-            callback?.Invoke(request.result == UnityEngine.Networking.UnityWebRequest.Result.Success);
+            await request.SendWebRequest();
+            return request.result == UnityEngine.Networking.UnityWebRequest.Result.Success;
         }
 
         public static int GetPendingCount() { lock (_lockObj) return _pendingLogs.Count; }
         public static bool CheckConnection() => !string.IsNullOrEmpty(UploadUrl);
         public static bool TestConnectionSync() => CheckConnection();
-        public static void ForceRetry() { if (EnableUpload && !string.IsNullOrEmpty(UploadUrl)) { var mono = MonoManager.Instance; if (mono != null) mono.StartCoroutine(UploadLocalLogs()); } }
+        public static void ForceRetry() { if (EnableUpload && !string.IsNullOrEmpty(UploadUrl)) UploadLocalLogsAsync().Forget(); }
 
-        private static IEnumerator UploadLocalLogs()
+        private static async UniTaskVoid UploadLocalLogsAsync()
         {
             string logDir = Path.Combine(Application.persistentDataPath, "Logs");
-            if (!Directory.Exists(logDir)) yield break;
+            if (!Directory.Exists(logDir)) return;
             string[] files = Directory.GetFiles(logDir, "*.txt");
             foreach (string file in files)
             {
                 string content = "";
                 try { content = File.ReadAllText(file); } catch { continue; }
-                bool success = false;
-                if (Type == ServerType.HTTP) yield return UploadHttp(content, r => success = r);
-                else yield return UploadWebDAV(content, r => success = r);
+                bool success = Type == ServerType.HTTP
+                    ? await UploadHttpAsync(content)
+                    : await UploadWebDAVAsync(content);
                 if (success) Debug.Log($"[LogUploader] 上传成功: {Path.GetFileName(file)}");
-                yield return new WaitForSeconds(0.5f);
+                await UniTask.Delay(TimeSpan.FromSeconds(0.5f));
             }
         }
     }

@@ -1,17 +1,19 @@
-﻿using System.Collections;
+﻿using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
-using System;
+
 namespace LFramework
 {
     /// <summary>
     /// 音频管理器
+    /// Phase 5 / 5.3：SFX 回收改 UniTask 驱动（CTS 可取消），不再使用协程。
     /// </summary>
     public class AudioManager : UnitySingleton<AudioManager>, IModule
     {
-        // 回收中的 SFX 协程（按 GameObject 跟踪，防止同一对象重复播放时旧协程掐断新声音）
-        private readonly Dictionary<GameObject, Coroutine> _sfxRecycle = new Dictionary<GameObject, Coroutine>();
+        // 回收中的 SFX 任务（按 GameObject 跟踪，防止同一对象重复播放时旧任务掐断新声音）
+        private readonly Dictionary<GameObject, CancellationTokenSource> _sfxRecycle = new Dictionary<GameObject, CancellationTokenSource>();
 
         // 每个 SFX 池的可用对象队列（已回收待复用的对象）
         private readonly Dictionary<GameObject, Queue<GameObject>> _sfxFreeQueues = new Dictionary<GameObject, Queue<GameObject>>();
@@ -237,22 +239,24 @@ namespace LFramework
             return source;
         }
 
-        private IEnumerator PlayAndRecycle2D(GameObject go, AudioSource source, float clipLength)
+        /// <summary>
+        /// 播放结束后回收 SFX 对象（UniTask + CTS：同一对象重复播放时取消旧任务，避免旧任务掐断新声音）
+        /// </summary>
+        private async UniTaskVoid RecycleAfterPlay(GameObject go, AudioSource source, float clipLength, bool is3D, CancellationToken ct)
         {
-            yield return new WaitForSeconds(clipLength);
-            _sfxRecycle.Remove(go);
-            if (go != null) { source.clip = null; go.SetActive(false); EnqueueFree(_sfxPool2D, go); }
-        }
+            await UniTask.Delay(TimeSpan.FromSeconds(clipLength), DelayType.DeltaTime, PlayerLoopTiming.Update, ct);
 
-        private IEnumerator PlayAndRecycle3D(GameObject go, AudioSource source, float clipLength)
-        {
-            yield return new WaitForSeconds(clipLength);
             _sfxRecycle.Remove(go);
-            if (go != null)
+            if (go == null) return;   // 目标销毁时对象随之销毁（Unity 假 null）
+
+            source.clip = null;
+            if (is3D)
             {
-                source.clip = null; go.transform.SetParent(_sfxPool3D.transform); go.transform.localPosition = Vector3.zero; go.SetActive(false);
-                EnqueueFree(_sfxPool3D, go);
+                go.transform.SetParent(_sfxPool3D.transform);
+                go.transform.localPosition = Vector3.zero;
             }
+            go.SetActive(false);
+            EnqueueFree(is3D ? _sfxPool3D : _sfxPool2D, go);
         }
 
         /// <summary>
@@ -269,18 +273,29 @@ namespace LFramework
         }
 
         /// <summary>
-        /// 启动 SFX 回收协程；若同一对象已有回收协程则先停止，避免旧协程掐断新声音
+        /// 启动 SFX 回收任务；若同一对象已有回收任务则先取消，避免旧任务掐断新声音
         /// </summary>
         private void StartRecycle(GameObject go, AudioSource source, float clipLength, bool is3D)
         {
-            if (_sfxRecycle.TryGetValue(go, out Coroutine old) && old != null)
+            if (_sfxRecycle.TryGetValue(go, out var old))
             {
-                StopCoroutine(old);
+                old.Cancel();
+                old.Dispose();
             }
-            Coroutine c = is3D
-                ? StartCoroutine(PlayAndRecycle3D(go, source, clipLength))
-                : StartCoroutine(PlayAndRecycle2D(go, source, clipLength));
-            _sfxRecycle[go] = c;
+            var cts = new CancellationTokenSource();
+            _sfxRecycle[go] = cts;
+            RecycleAfterPlay(go, source, clipLength, is3D, cts.Token).Forget();
+        }
+
+        /// <summary>取消全部回收任务（销毁/Dispose 时调用）</summary>
+        private void CancelAllRecycle()
+        {
+            foreach (var cts in _sfxRecycle.Values)
+            {
+                cts.Cancel();
+                cts.Dispose();
+            }
+            _sfxRecycle.Clear();
         }
 
         /// <summary>
@@ -302,8 +317,7 @@ namespace LFramework
 
         protected override void OnDestroy()
         {
-            StopAllCoroutines();
-            _sfxRecycle.Clear();
+            CancelAllRecycle();
             _sfxFreeQueues.Clear();
             base.OnDestroy();
         }
@@ -312,11 +326,9 @@ namespace LFramework
 
         public string DisplayName => GetType().Name;
         public UniTask InitializeAsync() => UniTask.CompletedTask;
-        public void Tick(float deltaTime) { }
         public void Dispose()
         {
-            StopAllCoroutines();
-            _sfxRecycle.Clear();
+            CancelAllRecycle();
             _sfxFreeQueues.Clear();
         }
 

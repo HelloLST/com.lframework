@@ -1,5 +1,6 @@
-﻿using System.Collections;
+﻿using System;
 using System.Collections.Generic;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -8,7 +9,7 @@ namespace LFramework
     /// <summary>
     /// 对象池管理器 - 优化版，使用字典实现 O(1) 查找
     /// </summary>
-    public class ObjectPoolsManager : UnitySingleton<ObjectPoolsManager>, IModule
+    public class ObjectPoolsManager : UnitySingleton<ObjectPoolsManager>, IModule, ITickable
     {
         //所有对象池的父物体
         private GameObject _poolsParent;
@@ -81,7 +82,7 @@ namespace LFramework
 
             if (delayTime > 0)
             {
-                MonoManager.Instance.StartCoroutine(DespawnCoroutine(go, delayTime));
+                DespawnDelayedAsync(go, delayTime).Forget();
             }
             else
             {
@@ -119,11 +120,11 @@ namespace LFramework
         }
 
         /// <summary>
-        /// 延迟回收协程
+        /// 延迟回收（UniTask 版本，替代协程；go 若已被销毁，DespawnImmediate 内部判空安全返回）
         /// </summary>
-        private IEnumerator DespawnCoroutine(GameObject go, float delayTime)
+        private async UniTaskVoid DespawnDelayedAsync(GameObject go, float delayTime)
         {
-            yield return new WaitForSeconds(delayTime);
+            await UniTask.Delay(TimeSpan.FromSeconds(delayTime));
             DespawnImmediate(go);
         }
 
@@ -266,7 +267,10 @@ namespace LFramework
             }
         }
 
-        private void Update()
+        #region ITickable 实现
+
+        /// <summary>周期裁剪由 ModuleManager 统一驱动（Phase 5 / 5.1：不再自挂 Update）。</summary>
+        public void Tick(float deltaTime)
         {
             if (AutoTrimInterval <= 0) return;
             if (Time.realtimeSinceStartup - _lastTrimTime < AutoTrimInterval) return;
@@ -274,11 +278,12 @@ namespace LFramework
             TrimAll();
         }
 
+        #endregion
+
         #region IModule 实现
 
         public string DisplayName => GetType().Name;
         public UniTask InitializeAsync() => UniTask.CompletedTask;
-        public void Tick(float deltaTime) { }
         public void Dispose() => ClearAll();
 
         #endregion

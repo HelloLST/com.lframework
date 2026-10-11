@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Events;
@@ -108,57 +108,6 @@ namespace LFramework
                 await UniTask.WaitUntil(() => asyncOperation.isDone);
                 progress?.Report(1f);
             }
-        }
-
-        #endregion
-
-        #region 协程版本 [Obsolete] 桥接
-
-        [Obsolete("Use LoadSceneAsync (UniTask version) instead. Will be removed in a future version.")]
-        public void LoadSceneAsync(string sceneName, UnityAction<float> loading = null,
-            UnityAction<AsyncOperation> completed = null, bool setActiveAfterCompleted = true,
-            LoadSceneMode mode = LoadSceneMode.Single)
-        {
-            MonoManager.Instance.StartCoroutine(LoadSceneCoroutine(sceneName, loading, completed, setActiveAfterCompleted, mode));
-        }
-
-        [Obsolete("Use LoadSceneAsync (UniTask version) instead. Will be removed in a future version.")]
-        public void LoadSceneAsync(int sceneIndex, UnityAction<float> loading = null,
-            UnityAction<AsyncOperation> completed = null, bool setActiveAfterCompleted = true,
-            LoadSceneMode mode = LoadSceneMode.Single)
-        {
-            MonoManager.Instance.StartCoroutine(LoadSceneCoroutine(sceneIndex, loading, completed, setActiveAfterCompleted, mode));
-        }
-
-        private IEnumerator LoadSceneCoroutine(string sceneName, UnityAction<float> loading,
-            UnityAction<AsyncOperation> completed, bool setActiveAfterCompleted, LoadSceneMode mode)
-        {
-            AsyncOperation asyncOperation = SceneManager.LoadSceneAsync(sceneName, mode);
-            yield return LoadSceneCoroutineCore(asyncOperation, loading, completed, setActiveAfterCompleted);
-        }
-
-        private IEnumerator LoadSceneCoroutine(int sceneIndex, UnityAction<float> loading,
-            UnityAction<AsyncOperation> completed, bool setActiveAfterCompleted, LoadSceneMode mode)
-        {
-            AsyncOperation asyncOperation = SceneManager.LoadSceneAsync(sceneIndex, mode);
-            yield return LoadSceneCoroutineCore(asyncOperation, loading, completed, setActiveAfterCompleted);
-        }
-
-        /// <summary>
-        /// 协程加载核心逻辑（进度轮询 + 激活）
-        /// </summary>
-        private IEnumerator LoadSceneCoroutineCore(AsyncOperation asyncOperation, UnityAction<float> loading,
-            UnityAction<AsyncOperation> completed, bool setActiveAfterCompleted)
-        {
-            asyncOperation.allowSceneActivation = false;
-            while (asyncOperation.progress < 0.9f)
-            {
-                loading?.Invoke(asyncOperation.progress);
-                yield return null;
-            }
-            loading?.Invoke(1);
-            asyncOperation.allowSceneActivation = setActiveAfterCompleted;
-            completed?.Invoke(asyncOperation);
         }
 
         #endregion

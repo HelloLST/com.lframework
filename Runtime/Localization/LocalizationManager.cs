@@ -241,7 +241,6 @@ namespace LFramework
 
         public string DisplayName => GetType().Name;
         public UniTask InitializeAsync() => UniTask.CompletedTask;
-        public void Tick(float deltaTime) { }
         public void Dispose() { }
 
         #endregion

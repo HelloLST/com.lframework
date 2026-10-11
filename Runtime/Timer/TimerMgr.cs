@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -234,7 +234,7 @@ namespace LFramework
     /// <summary>
     /// 计时器管理器
     /// </summary>
-    public class TimerMgr : UnitySingleton<TimerMgr>, IModule
+    public class TimerMgr : UnitySingleton<TimerMgr>, IModule, ITickable
     {
         //计时器列表
         private List<TimerData> m_TimerList = new List<TimerData>();
@@ -363,11 +363,6 @@ namespace LFramework
             }
         }
 
-        private void Update()
-        {
-            UpdateAll();
-        }
-
         /// <summary>
         /// 延迟指定秒数（UniTask 版本，作为协程替代）
         /// </summary>
@@ -380,11 +375,17 @@ namespace LFramework
                 cancellationToken);
         }
 
+        #region ITickable 实现
+
+        /// <summary>由 ModuleManager 统一驱动（Phase 5 / 5.1：不再自挂 Update，逐帧派发归一）。</summary>
+        public void Tick(float deltaTime) => UpdateAll();
+
+        #endregion
+
         #region IModule 实现
 
         public string DisplayName => GetType().Name;
         public UniTask InitializeAsync() => UniTask.CompletedTask;
-        public void Tick(float deltaTime) { }
         public void Dispose() => DisposeAll();
 
         #endregion

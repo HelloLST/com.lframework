@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Cysharp.Threading.Tasks;
@@ -10,6 +10,7 @@ namespace LFramework
     /// 模块管理器 - 框架启动中枢。
     /// 读取 ModuleManifest SO 清单 -> 拓扑排序 -> 有序创建模块实例 -> 依次初始化。
     /// 替代 GameLaunch 中硬编码的 AddComponent 链，使模块清单可由策划在 Inspector 中编辑。
+    /// 逐帧派发：仅对实现 <see cref="ITickable"/> 的模块调用 Tick（Phase 5 / 5.1）。
     /// </summary>
     public class ModuleManager : MonoBehaviour
     {
@@ -108,7 +109,7 @@ namespace LFramework
 
             IsInitialized = true;
 
-            // 统一逐帧派发：注册到 MonoManager 的 updateEvent，删除自身 Update()
+            // 统一逐帧派发：注册到 MonoManager 的 Update 监听
             _monoManager = GetModule<MonoManager>();
             if (_monoManager != null)
             {
@@ -117,7 +118,7 @@ namespace LFramework
             }
             else
             {
-                Debug.LogWarning("[ModuleManager] 未找到 MonoManager，IModule.Tick 将不会被调用。请确保清单中包含 MonoManager。");
+                Debug.LogWarning("[ModuleManager] 未找到 MonoManager，ITickable 将不会被调用。请确保清单中包含 MonoManager。");
             }
 
             Debug.Log($"[ModuleManager] 全部模块初始化完成，共 {_modules.Count} 个 IModule + {_instancesByTypeName.Count - _modules.Count} 个非 IModule。");
@@ -133,12 +134,12 @@ namespace LFramework
         }
 
         // ================================================================
-        // 逐帧 Tick — 由 MonoManager.updateEvent 统一驱动，不再自带 Update()
+        // 逐帧 Tick — 由 MonoManager.Update 统一驱动，不再自带 Update()
         // ================================================================
 
         /// <summary>
-        /// MonoManager.updateEvent 回调：按顺序调用所有 IModule.Tick。
-        /// 全工程的逐帧逻辑统一从 MonoManager.Update() → updateEvent → 此方法流出，
+        /// MonoManager Update 回调：按初始化顺序调用所有 ITickable.Tick。
+        /// 全工程的逐帧逻辑统一从 MonoManager.Update() → 此方法流出，
         /// 避免多个 MonoBehaviour.Update() 各自为政。
         /// </summary>
         private void OnModulesTick()
@@ -147,8 +148,11 @@ namespace LFramework
             float dt = Time.deltaTime;
             for (int i = 0; i < _modules.Count; i++)
             {
-                try { _modules[i].Tick(dt); }
-                catch (Exception e) { Debug.LogError($"[ModuleManager] Tick 异常 ({_modules[i].DisplayName}):\n{e}"); }
+                if (_modules[i] is ITickable tickable)
+                {
+                    try { tickable.Tick(dt); }
+                    catch (Exception e) { Debug.LogError($"[ModuleManager] Tick 异常 ({_modules[i].DisplayName}):\n{e}"); }
+                }
             }
         }
 
