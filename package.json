@@ -4,6 +4,9 @@
   "displayName": "LFramework Core",
   "description": "LFramework 轻量级 Unity 客户端框架内核：模块系统（清单驱动+拓扑排序）、UI（面板栈/层级/KeepAlive/命名约定自动绑定）、资源（引用计数+LRU 缓存）、对象池、音频、计时器、事件（EventCenter + SO 事件通道）、日志（级别/文件/脱敏/上传）、本地化、场景、UDP 设备接入、SO 架构层（ScriptableVariable/EventChannel/RuntimeSet/PauseService）。依赖 UniTask，安装见 README。",
   "unity": "2022.3",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  },
   "author": {
     "name": "HelloLST"
   },
