@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 namespace LFramework.UI
 {
@@ -24,22 +24,9 @@ namespace LFramework.UI
         public const string DefaultRootPrefabPath = "Prefabs/UI/UIRoot";
         public const string DefaultPanelPrefabDir = "Prefabs/UI/UIPanel";
 
-        private static UISettings _instance;
-        private static bool _loaded;
-
-        /// <summary>缓存的配置资产（可能为 null，此时全部走默认值）。</summary>
-        public static UISettings Instance
-        {
-            get
-            {
-                if (!_loaded)
-                {
-                    _loaded = true;
-                    _instance = Resources.Load<UISettings>("UISettings");
-                }
-                return _instance;
-            }
-        }
+        /// <summary>缓存的配置资产（可能为 null，此时全部走默认值）。
+        /// 缓存由 ScriptableConfigCache 统一管理：关闭 Domain Reload 时进 Play 自动重置（Phase 5 / 5.5）。</summary>
+        public static UISettings Instance => ScriptableConfigCache<UISettings>.Get("UISettings");
 
         /// <summary>UI 根预制体路径（带默认值兜底）。</summary>
         public static string RootPrefabPath =>

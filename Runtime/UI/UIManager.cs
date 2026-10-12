@@ -1,4 +1,4 @@
-﻿using Cysharp.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -37,6 +37,17 @@ namespace LFramework.UI
 
         // 每个面板对应的资源句柄：获取即钉住，销毁面板 Dispose 归还（Phase 5 / 5.6 句柄化）
         private static readonly Dictionary<Type, IResourceHandle> _panelHandles = new Dictionary<Type, IResourceHandle>();
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticStateForNewSession()
+        {
+            // 关闭 Domain Reload 时清掉上一会话的静态引用（假 null 风险）；Init() 在 Awake 重建（Phase 5 / 5.5）
+            _panelDic = null;
+            Canvas = null;
+            eventSystem = null;
+            UICamera = null;
+            Layers = null;
+        }
 
         public static RectTransform GetLayer(UIPanelLayer layer)
         {

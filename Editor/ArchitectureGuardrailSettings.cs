@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 namespace LFramework.Editor
@@ -26,21 +26,9 @@ namespace LFramework.Editor
         [Tooltip("额外排除的路径片段（包含即跳过扫描），如 \"/ConfigTools/\"")]
         public string[] extraExcludeDirs = Array.Empty<string>();
 
-        private static ArchitectureGuardrailSettings _instance;
-        private static bool _loaded;
-
-        /// <summary>缓存的配置资产（可能为 null）。</summary>
-        public static ArchitectureGuardrailSettings Instance
-        {
-            get
-            {
-                if (!_loaded)
-                {
-                    _loaded = true;
-                    _instance = Resources.Load<ArchitectureGuardrailSettings>("ArchitectureGuardrailSettings");
-                }
-                return _instance;
-            }
-        }
+        /// <summary>缓存的配置资产（可能为 null）。
+        /// 缓存由 ScriptableConfigCache 统一管理：关闭 Domain Reload 时进 Play 自动重置（Phase 5 / 5.5）。</summary>
+        public static ArchitectureGuardrailSettings Instance =>
+            ScriptableConfigCache<ArchitectureGuardrailSettings>.Get("ArchitectureGuardrailSettings");
     }
 }

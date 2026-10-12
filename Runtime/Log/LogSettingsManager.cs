@@ -9,13 +9,12 @@ namespace LFramework
     public static class LogSettingsManager
     {
         private const string RESOURCE_PATH = "LogSettings";
-        private static LogSettingsAsset _cachedAsset = null;
 
         /// <summary> 加载配置（从 Resources 加载 ScriptableObject） </summary>
         public static void Load()
         {
             //先尝试从 Resources 加载
-            var asset = Resources.Load<LogSettingsAsset>(RESOURCE_PATH);
+            var asset = GetCachedAsset();
 
             if (asset != null)
             {
@@ -27,8 +26,6 @@ namespace LFramework
             {
                 Debug.Log($"[LogSettings] 配置文件不存在，使用默认配置");
             }
-
-            _cachedAsset = asset;
         }
 
         /// <summary> 保存配置（保存到 ScriptableObject） </summary>
@@ -55,7 +52,7 @@ namespace LFramework
         private static LogSettingsAsset GetOrCreateAsset()
         {
             //先尝试从 Resources 加载
-            var asset = Resources.Load<LogSettingsAsset>(RESOURCE_PATH);
+            var asset = GetCachedAsset();
 
             if (asset == null)
             {
@@ -139,25 +136,21 @@ namespace LFramework
         /// <summary> 配置文件是否存在 </summary>
         public static bool Exists()
         {
-            var asset = Resources.Load<LogSettingsAsset>(RESOURCE_PATH);
+            var asset = GetCachedAsset();
             return asset != null;
         }
 
         /// <summary> 获取当前配置资源（用于编辑器窗口显示） </summary>
-        public static LogSettingsAsset GetCurrentAsset()
-        {
-            if (_cachedAsset != null)
-                return _cachedAsset;
-
-            _cachedAsset = Resources.Load<LogSettingsAsset>(RESOURCE_PATH);
-            return _cachedAsset;
-        }
+        public static LogSettingsAsset GetCurrentAsset() => GetCachedAsset();
 
         /// <summary> 重新加载配置（清除缓存） </summary>
         public static void Reload()
         {
-            _cachedAsset = null;
+            ScriptableConfigCache<LogSettingsAsset>.Invalidate();
             Load();
         }
+
+        /// <summary> 缓存访问（ScriptableConfigCache 统一管理：关闭 Domain Reload 时进 Play 自动重置，Phase 5 / 5.5） </summary>
+        private static LogSettingsAsset GetCachedAsset() => ScriptableConfigCache<LogSettingsAsset>.Get(RESOURCE_PATH);
     }
 }
