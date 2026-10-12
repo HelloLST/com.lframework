@@ -5,9 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] - 2026-10-11（进行中）
+## [0.9.0] - 2026-10-12
 
-首个包形态版本。自 LFramework（XYFrameWorkDemo/Assets/Scripts/Core）整体迁入：迁入前完成 Phase 1 止血修复；迁入后完成 Phase 5 第一批（5.1–5.3，提交 `5c486eb`）、第二批（5.4 / 5.6 / 5.8，提交 `501236f`）与 5.5（提交 `313a527`）的内核打磨。
+首个包形态版本，已打 tag `v0.9.0`。自 LFramework（XYFrameWorkDemo/Assets/Scripts/Core）整体迁入：迁入前完成 Phase 1 止血修复；迁入后完成 Phase 5 第一批（5.1–5.3，提交 `5c486eb`）、第二批（5.4 / 5.6 / 5.8，提交 `501236f`）、5.5（提交 `313a527`）与 5.7 前半（提交 `fb0689c`）的内核打磨，以及 Phase 6 的文档产出（`Documentation~/`）。
+
+> 本版定位为**试吃版**：由 `XYFrameWorkDemo` 先吃两周毛刺，后续修复走 `0.9.x`，稳定后再升 `1.0.0`。
 
 ### Fixed
 - **ResourcesLoader**：修正引用计数所有权（`Load`=隐式持有 → `Release(path)` 归还；`AddRef/ReleaseRef` 显式钉住）；容量淘汰改为硬约束（跳过显式钉住的非 GameObject 资产）；清理循环加防自旋 guard —— 修复"缓存超限时自动清理协程无限循环卡死主线程"与"缓存无界增长"两个缺陷。
