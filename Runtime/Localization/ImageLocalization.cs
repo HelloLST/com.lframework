@@ -23,8 +23,9 @@ namespace LFramework
         [SerializeField]
         protected SrcMode m_SrcMode = SrcMode.Auto;
 
-        // 当前持有的资源路径（Resources 模式，持有引用计数防止被缓存淘汰）
-        private string m_RefPath;
+        // 当前持有的资源句柄（Resources 模式：句柄钉住引用计数，防止被缓存淘汰。
+        // Phase 5 / 5.6 起用句柄替代手工 AddRef/ReleaseRef 配对）
+        private IResourceHandle m_RefHandle;
 
         // 网络精灵缓存：url -> Sprite（同一 url 只下载一次，进程生命周期内复用）
         private static readonly Dictionary<string, Sprite> _netSpriteCache = new Dictionary<string, Sprite>();
@@ -93,15 +94,15 @@ namespace LFramework
             Sprite sprite = await ResourcesManager.Instance.LoadAsync<Sprite>(url);
             if (sprite == null || target == null) return;
 
-            // 持有引用，防止被缓存淘汰
-            ResourcesManager.Instance.AddRef(url);
+            // 以句柄钉住引用，防止被缓存淘汰（Phase 5 / 5.6：替代手工 AddRef/ReleaseRef 配对）
+            IResourceHandle handle = ResourcesManager.Instance.Pin<Sprite>(url);
             if (target == null)
             {
-                ResourcesManager.Instance.ReleaseRef(url);
+                handle.Dispose();
                 return;
             }
 
-            ApplySprite(sprite, url);
+            ApplySprite(sprite, handle);
         }
 
         // 网络加载：带全局缓存与并发去重
@@ -174,12 +175,12 @@ namespace LFramework
             }
         }
 
-        private void ApplySprite(Sprite sprite, string refPath)
+        private void ApplySprite(Sprite sprite, IResourceHandle handle)
         {
             // 先释放上一张持有的引用计数
             ReleaseHeldAssets();
 
-            m_RefPath = refPath;
+            m_RefHandle = handle;
             if (m_Target != null)
             {
                 m_Target.sprite = sprite;
@@ -188,10 +189,10 @@ namespace LFramework
 
         private void ReleaseHeldAssets()
         {
-            if (!string.IsNullOrEmpty(m_RefPath))
+            if (m_RefHandle != null)
             {
-                ResourcesManager.Instance.ReleaseRef(m_RefPath);
-                m_RefPath = null;
+                m_RefHandle.Dispose();
+                m_RefHandle = null;
             }
         }
 

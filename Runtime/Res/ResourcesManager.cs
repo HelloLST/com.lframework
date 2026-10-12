@@ -58,12 +58,33 @@ namespace LFramework
             _loader.Release(path);
         }
 
+        /// <summary>
+        /// 【已废弃 · Phase 5 / 5.6】增加显式引用计数。
+        /// 请改用 <see cref="Pin{T}"/> 返回的 <see cref="IResourceHandle"/>：
+        /// 手工 AddRef/ReleaseRef 配对容易漏，句柄 Dispose 会自动归还，配对关系也可静态追踪。
+        /// </summary>
+        [Obsolete("请改用 ResourcesManager.Pin<T>() 返回的 IResourceHandle；手工 AddRef/ReleaseRef 配对易漏。旧 API 将在 1.x 后移除。")]
         public void AddRef(string path)
         {
             _loader.AddRef(path);
         }
 
+        /// <summary>
+        /// 【已废弃 · Phase 5 / 5.6】减少显式引用计数。
+        /// 请改用 <see cref="Pin{T}"/> 返回的 <see cref="IResourceHandle"/>。
+        /// </summary>
+        [Obsolete("请改用 ResourcesManager.Pin<T>() 返回的 IResourceHandle；手工 AddRef/ReleaseRef 配对易漏。旧 API 将在 1.x 后移除。")]
         public void ReleaseRef(string path)
+        {
+            _loader.ReleaseRef(path);
+        }
+
+        /// <summary>
+        /// 归还一次显式引用 —— <see cref="ResourceHandle.Dispose"/> 专用通道。
+        /// 单独开这个方法是为了让句柄实现自身不触发上方两个 [Obsolete] 门面的弃用警告；
+        /// 业务代码不要直接调用，请走 <see cref="Pin{T}"/> + Dispose。
+        /// </summary>
+        internal void ReleaseExplicitRef(string path)
         {
             _loader.ReleaseRef(path);
         }

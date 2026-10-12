@@ -5,7 +5,10 @@ namespace LFramework
     /// <summary>
     /// 资源句柄（Phase 5 / 5.6）：以"获取即钉住、Dispose 即归还"的方式持有资源引用，
     /// 替代手工 AddRef/ReleaseRef 配对。推荐业务优先使用句柄；
-    /// 旧 API（AddRef/ReleaseRef/Release）保留一个版本周期后评估标记 Obsolete。
+    /// 旧 API <see cref="ResourcesManager.AddRef"/> / <see cref="ResourcesManager.ReleaseRef"/>
+    /// 已标 [Obsolete]（Phase 5 / 5.6），保留一个版本周期后移除。
+    /// 注意 <see cref="ResourcesManager.Release"/> 不在废弃之列——它是隐式持有的归还路径，
+    /// 与 Load 配对，是当前的正确用法。
     /// 用法：
     /// <code>
     ///   var handle = ResourcesManager.Instance.Pin&lt;Sprite&gt;("Icons/coin");
@@ -43,7 +46,7 @@ namespace LFramework
         {
             if (_disposed) return;
             _disposed = true;
-            _manager.ReleaseRef(Path);
+            _manager.ReleaseExplicitRef(Path);
         }
     }
 }
