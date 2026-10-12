@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > 本版定位为**试吃版**：由 `XYFrameWorkDemo` 先吃两周毛刺，后续修复走 `0.9.x`，稳定后再升 `1.0.0`。
 
 ### Fixed
+- **Package manifest 缺内置模块依赖**（空工程实测发现）：`package.json` 未声明框架代码用到的 Unity 内置模块，导致**在全新工程里整个包编译失败**（`AudioManager` 的 `AudioSource`/`AudioClip` 等 45 处 `CS1069`）。已补 `com.unity.modules.audio / animation / jsonserialize / unitywebrequest / imgui` 五项依赖。demo 工程的 manifest 恰好带了一长串 `com.unity.modules.*`，掩盖了这个问题。
 - **ResourcesLoader**：修正引用计数所有权（`Load`=隐式持有 → `Release(path)` 归还；`AddRef/ReleaseRef` 显式钉住）；容量淘汰改为硬约束（跳过显式钉住的非 GameObject 资产）；清理循环加防自旋 guard —— 修复"缓存超限时自动清理协程无限循环卡死主线程"与"缓存无界增长"两个缺陷。
 - **UIManager**：销毁面板时在 `ReleaseRef` 后追加 `Release(path)`，引用收支平账。
 - **ModuleManifest**：拓扑排序初始队列按清单顺序入队；环回退按清单顺序 —— 修复"无依赖模块初始化顺序依赖字典枚举顺序（未定义行为）"。
