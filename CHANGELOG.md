@@ -53,3 +53,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 回归测试：ResourcesLoader 引用计数/容量收紧 ×5、ModuleManifest 拓扑排序顺序稳定性 ×6。
 - 测试：`BindablePropertyTests` ×7（同值不触发、`ForceNotify`、`invokeImmediately` 初值同步、`UnbindAll` 生效、`OnUIDestroy` 自动退订）；全量 69/69 PlayMode 绿。
 - `Documentation~/快速上手.md`（Phase 6）：面向新工程的从零上手 —— 安装（UniTask + 本包）→ 模块清单与 `ModuleManager` → 日志 / 资源 / UI 三条链路 → 常见坑表。README 的「文档」一节改为指向它。
+- `Documentation~/使用说明.md`（Phase 6）：参考手册的**包版**。由 demo 仓库那份剔除 demo 专属章节（场景与入口、启动链路、构建、测试基线、业务配置、demo 示例、已知问题清单）与 demo 表格行得到；框架章节逐字保留，仅改写了章节内的 demo 引用。章节编号刻意不动（重编号会打断十余处正文互引），目录只列出存留章节。两份文档互相注明关系与「框架章节两边同步」的规则。
