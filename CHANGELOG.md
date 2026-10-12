@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed（Phase 5.5 · `313a527`）
 - **新增 `ScriptableConfigCache<T>`**（Runtime/Config）：把静态缓存 + 惰性加载 + 关域重载（DR-off）重置收成一个泛型基类；`UISettings`、`LogSettingsManager`、`ArchitectureGuardrailSettings` 三份同构样板迁入，各自只剩资源路径与默认值。
 
+### Changed（Phase 5.7 · 吸收自 XyFrame）
+- **吸收 `BindableProperty<T>`**（Runtime/UI）：值真正变化时触发 `Changed`（用 `EqualityComparer<T>.Default` 比较，同值赋值不触发），并提供 `ForceNotify()` 供初始化后强制同步。属 D6 冻结的“只吸收三件”第一件；**未搬运** XyFrame 的 Controller / View / Model 三件套，避免形成第三套 UI 范式（D3）。
+- **`UIPanelBase` 绑定钩子**：新增 `Bind<T>(property, handler, invokeImmediately)` / `Unbind<T>(...)` / `UnbindAll()`；经 `Bind` 建立的订阅会被登记，并在 `OnUIDestroy()` 里自动退订，面板不必手写 `-=`。**解绑点刻意选销毁而非 `OnUIDisable`** —— 保活面板（`[UIKeepAlive]`）隐藏时不销毁，绑定点放在 Disable 会把订阅弄丢。
+
 ### Added
 - `StaticStateAuditor`（Editor）：静态状态审计，扫描"持有 Unity 对象且无重置入口"的可写静态字段。
 - `LFramework/Validate Module Manifest Asset`（Editor）：清单 typeName 编辑期校验。
@@ -43,4 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IResourceHandle` + `ResourcesManager.Pin<T>()`（Runtime/Res）：资源句柄 API（获取即钉住、Dispose 即归还）。
 - `UIEventKeys`（Runtime/UI）：UI 生命周期事件 key 集中化。
 - `UnitySingleton.TryGetExisting`（Runtime/Singleton）：不创建实例的单例探针。
+- `BindableProperty<T>`（Runtime/UI）：可绑定属性，赋值即通知（Phase 5 / 5.7）。
+- `UIPanelBase.Bind / Unbind / UnbindAll`（Runtime/UI）：面板侧数据绑定钩子，面板销毁自动退订。
 - 回归测试：ResourcesLoader 引用计数/容量收紧 ×5、ModuleManifest 拓扑排序顺序稳定性 ×6。
+- 测试：`BindablePropertyTests` ×7（同值不触发、`ForceNotify`、`invokeImmediately` 初值同步、`UnbindAll` 生效、`OnUIDestroy` 自动退订）；全量 69/69 PlayMode 绿。

@@ -1,4 +1,6 @@
-﻿using UnityEngine;
+﻿using System;
+using System.Collections.Generic;
+using UnityEngine;
 using Cysharp.Threading.Tasks;
 
 namespace LFramework.UI
@@ -20,6 +22,9 @@ namespace LFramework.UI
         public PanelState State { get; internal set; } = PanelState.Opening;
 
         private bool _uiComponentsBound;
+
+        // 已登记的数据绑定解绑动作（惰性创建；Phase 5 / 5.7）
+        private List<Action> _unbindActions;
 
         /// <summary>
         /// 生命周期入口，自动按命名约定绑定控件字段
@@ -56,9 +61,58 @@ namespace LFramework.UI
         }
         public virtual void OnUIDestroy()
         {
+            // 先退订全部数据绑定，避免面板销毁后仍被 BindableProperty 的委托持有（Phase 5 / 5.7）
+            UnbindAll();
             State = PanelState.Destroyed;
             Destroy(gameObject);
         }
+
+        #region 数据绑定（Phase 5 / 5.7，吸收自 XyFrame 的 BindableProperty）
+
+        /// <summary>
+        /// 订阅一个 <see cref="BindableProperty{T}"/>：值变化时回调 handler，并登记解绑动作。
+        /// 通过本方法建立的订阅会在 <see cref="OnUIDestroy"/> 时自动退订，面板不必手写 -=。
+        /// 保活面板（[UIKeepAlive]）隐藏时不销毁，订阅随之保留，重新显示时拿到的仍是最新值。
+        /// </summary>
+        /// <param name="property">被绑定的属性；null 时忽略</param>
+        /// <param name="handler">值变化回调；null 时忽略</param>
+        /// <param name="invokeImmediately">true 则立即用当前值回调一次，用于打开界面时同步初值</param>
+        protected void Bind<T>(BindableProperty<T> property, Action<T> handler, bool invokeImmediately = false)
+        {
+            if (property == null || handler == null) return;
+
+            property.Changed += handler;
+            if (_unbindActions == null) _unbindActions = new List<Action>();
+            _unbindActions.Add(() => property.Changed -= handler);
+
+            if (invokeImmediately) handler(property.Value);
+        }
+
+        /// <summary>
+        /// 退订一个此前用 <see cref="Bind{T}"/> 建立的订阅（同一属性 + 同一回调）。
+        /// 重复调用安全；残留的登记项由 <see cref="UnbindAll"/> 收尾。
+        /// </summary>
+        protected void Unbind<T>(BindableProperty<T> property, Action<T> handler)
+        {
+            if (property == null || handler == null) return;
+            property.Changed -= handler;
+        }
+
+        /// <summary>
+        /// 退订本面板建立的全部数据绑定。由 <see cref="OnUIDestroy"/> 自动调用；
+        /// 面板若被 UIManager 之外的路径销毁，可自行调用来避免模型持续持有已销毁面板。
+        /// </summary>
+        public void UnbindAll()
+        {
+            if (_unbindActions == null) return;
+            for (int i = 0; i < _unbindActions.Count; i++)
+            {
+                _unbindActions[i]();
+            }
+            _unbindActions.Clear();
+        }
+
+        #endregion
 
         /// <summary>
         /// 面板打开动画钩子，默认无动画立即完成
