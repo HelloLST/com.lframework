@@ -52,3 +52,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `UIPanelBase.Bind / Unbind / UnbindAll`（Runtime/UI）：面板侧数据绑定钩子，面板销毁自动退订。
 - 回归测试：ResourcesLoader 引用计数/容量收紧 ×5、ModuleManifest 拓扑排序顺序稳定性 ×6。
 - 测试：`BindablePropertyTests` ×7（同值不触发、`ForceNotify`、`invokeImmediately` 初值同步、`UnbindAll` 生效、`OnUIDestroy` 自动退订）；全量 69/69 PlayMode 绿。
+- `Documentation~/快速上手.md`（Phase 6）：面向新工程的从零上手 —— 安装（UniTask + 本包）→ 模块清单与 `ModuleManager` → 日志 / 资源 / UI 三条链路 → 常见坑表。README 的「文档」一节改为指向它。
