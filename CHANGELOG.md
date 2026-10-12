@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启动期日志丢失**（Phase 5 / 5.4）：`LogManager` 不再被日志调用懒创建实例；`Instance` 就绪前的日志先进静态缓冲，模块初始化后回放。
 - **`UIManager` 静态残留（关域重载关闭时）**（Phase 5.5）：补 `RuntimeInitializeOnLoadMethod` 静态重置，清掉 Phase 1 静态审计遗留的最后一项高危缓存。
 - **`LogSettingsManager` 迁移残留**（Phase 5.5）：修掉改用 `ScriptableConfigCache` 后遗留的 `_cachedAsset` 引用（迁移期编译错误，已修）。
+- **`LogManager` 残留 `Update()`**（Phase 5.1 漏改）：刷盘逻辑同时挂在 Unity `Update()` 与 `ITickable.Tick()` 上，每帧执行两次。`LogManager` 继承自 `UnitySingleton`（MonoBehaviour），所以 `Update()` 确实被 Unity 调用，不是死代码。删除 `Update()`，逐帧逻辑真正回到 MonoManager → ModuleManager 单一出口（使上面的 5.1 声明名副其实）。
 
 ### Changed（Phase 5 第一批 · `5c486eb`）
 - **`IModule` 拆出 `ITickable`**：逐帧更新成为可选能力，纯初始化型模块不再被迫写空 Tick；`ModuleManager` 只对 `ITickable` 派发。`TimerMgr` / `ObjectPoolsManager` / `LogManager`（刷盘 Tick）实现 `ITickable`，删除各自挂载的 `Update()`——全工程逐帧逻辑归一到 MonoManager 单一出口。

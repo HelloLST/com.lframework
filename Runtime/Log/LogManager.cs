@@ -228,14 +228,6 @@ namespace LFramework
 #endif
         }
 
-        private void Update()
-        {
-            // 双缓冲模式下由 Unity 生命周期驱动文件日志按时间阈值落盘
-            if (_fileWriter != null && _fileWriter.NeedsFlush())
-            {
-                _fileWriter.Flush();
-            }
-        }
         #endregion
 
         #region 公共方法

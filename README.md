@@ -40,12 +40,12 @@
 | 模块 | 入口 | 说明 |
 |---|---|---|
 | 模块系统 | `ModuleManager` + `ModuleManifest` SO | 清单驱动 + 拓扑排序；编辑期校验菜单 `LFramework/Validate Module Manifest Asset` |
-| UI | `UIManager` / `UIPanelBase` | 面板栈 / 层级（`[UILayer]`）/ 复用（`[UIKeepAlive]`）/ 命名约定自动绑定 |
-| 资源 | `ResourcesManager` | 引用计数 + LRU；契约：`Load` 隐式持有 → `Release(path)` 归还；`AddRef/ReleaseRef` 显式钉住 |
+| UI | `UIManager` / `UIPanelBase` | 面板栈 / 层级（`[UILayer]`）/ 复用（`[UIKeepAlive]`）/ 命名约定自动绑定 / 数据绑定（`BindableProperty<T>` + `UIPanelBase.Bind`，`OnUIDestroy` 自动退订） |
+| 资源 | `ResourcesManager` | 引用计数 + LRU；契约：`Load` 隐式持有 → `Release(path)` 归还；钉住资源用 `Pin<T>()` 取 `IResourceHandle`，Dispose 即归还（`AddRef/ReleaseRef` 已标 `[Obsolete]`，保留一个版本周期） |
 | 对象池 | `ObjectPoolsManager` | 池化 + 空闲裁剪 + 假 null 清扫 |
 | 事件 | `EventCenter` / SO `GameEventChannel` | 动态 key 走 EventCenter；稳定业务事件走 SO 通道（护栏强制） |
 | SO 架构层 | `ScriptableVariable` / `RuntimeSet` / `GamePauseService` | 共享变量 / 运行时集合 / 暂停唯一出口（timeScale 只准走它） |
-| 日志 | `LogManager` | 级别 / 文件双缓冲 / 敏感信息脱敏 / 远程上传 |
+| 日志 | `LogManager` | 级别 / 文件双缓冲 / 敏感信息脱敏 / 远程上传；启动期日志先入缓冲、`Instance` 就绪后回放 |
 | 本地化 | `LocalizationManager` | Excel → JSON → 字典，切语言广播自动刷新 |
 | 音频 / 计时器 / 场景 | `AudioManager` / `TimerMgr` / `LoadSceneManager` | |
 | 设备接入 | `UDPDevice` | **定位：局域网设备 JSON 接入适配层，不是通用网络层**（无重连/心跳/校验） |
@@ -59,7 +59,7 @@
 
 ## 文档
 
-详细模块 API 与示例见 `Documentation~/`（迁移中，当前以 `使用说明.md` 为准）。
+模块 API 与示例见 [`Documentation~/使用说明.md`](Documentation~/使用说明.md)。
 
 ## License
 
