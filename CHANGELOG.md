@@ -1,10 +1,16 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **开放泛型类型上的会话重置从未生效**（Phase 7 完整性测试发现）：引擎不会为闭合泛型类型调用声明在开放泛型类型中的 `[RuntimeInitializeOnLoadMethod]`（已实测 Unity 2022.3.62f3c1），导致关域重载（DR-off）下 `SingletonBase<T>` 静态实例、`ScriptableConfigCache<T>` 配置缓存、`UnitySingleton<T>` 的 `_instance`/`IsExisted`/`_isQuitting` 全部跨 Play 会话残留——0.9.0 里"进入 Play 自动重置"的声明对这三类不成立。新增非泛型 `RuntimeSessionReset`（Runtime/Singleton）作为引擎回调入口：三个泛型类在静态构造函数里注册重置委托（注册时立即执行一次），每次进 Play 遍历重置；泛型类型上的旧特性仅保留作静态审计标记。demo 仓库新增真实双会话完整性测试（EnterPlayMode/ExitPlayMode 两次、关 Domain Reload）证明修复。
+- **ArchitectureGuardrail 构建拦截开关不持久**（Phase 7.4）：`FailBuildOnHardViolation` 由内存静态字段改为按工程的 `EditorPrefs`（key 含工程路径），菜单勾选跨编译/重启保留；默认仍为关闭，不改变现有出包行为。
+- **ArchitectureGuardrail 扫描报告落盘**（Phase 7.4）：全量扫描与构建拦截共用 `ScanProject()`，结果写工程根 `Artifacts/ArchitectureGuardrail/report.json`（时间戳、开关、文件数、错误/提醒/读取失败计数与逐条违规），供 CI 消费；读取失败的文件计入 `ReadFailures`，开启拦截时同样中止构建；空工程（无 `Assets/Scripts`）产出零文件报告而非抛异常；测试程序集目录（`/Tests/`、`/TestsPlayMode/`）纳入排除清单。
 ## [0.9.0] - 2026-10-12
 
 首个包形态版本，已打 tag `v0.9.0`。自 LFramework（XYFrameWorkDemo/Assets/Scripts/Core）整体迁入：迁入前完成 Phase 1 止血修复；迁入后完成 Phase 5 第一批（5.1–5.3，提交 `5c486eb`）、第二批（5.4 / 5.6 / 5.8，提交 `501236f`）、5.5（提交 `313a527`）与 5.7 前半（提交 `fb0689c`）的内核打磨，以及 Phase 6 的文档产出（`Documentation~/`）。

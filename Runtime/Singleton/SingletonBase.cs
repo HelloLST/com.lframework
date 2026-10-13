@@ -23,8 +23,17 @@ namespace LFramework
         /// 关闭 Domain Reload 时静态实例会跨 Play 会话残留：
         /// 第二次进 Play 拿到的还是上一个会话的实例，其缓存里的 Unity 资源全部是假 null，
         /// 导致 Load 命中缓存却返回失效对象。进入 Play 时强制清空，实例由下一次访问惰性重建
-        /// （Phase 1 / P0-2 修复）。Domain Reload 开启时静态本就会被清空，此方法幂等无害。
+        /// （Phase 1 / P0-2 修复）。
+        ///
+        /// 注意：引擎不会为【开放泛型类型】调用 [RuntimeInitializeOnLoadMethod]
+        /// （已实测 Unity 2022.3.62f3c1）。真正的引擎入口在非泛型 RuntimeSessionReset，
+        /// 由静态构造函数把本重置注册进去；下面的特性仅作为静态审计器的重置标记保留。
         /// </summary>
+        static SingletonBase()
+        {
+            RuntimeSessionReset.Register(ResetInstanceForNewSession);
+        }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetInstanceForNewSession()
         {

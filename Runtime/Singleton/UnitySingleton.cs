@@ -18,10 +18,23 @@ namespace LFramework
         /// <summary>
         /// S2 修复: 仅在 Application.quitting 时置 _isQuitting = true，
         /// 不再在 OnDestroy 中置位(避免运行期单例销毁后其他单例 Instance 返回 null 的自锁死)。
+        ///
+        /// 会话重置：进 Play 清空上个会话的 _instance / IsExisted / _isQuitting 并重绑退出事件
+        /// （旧实现只清 _isQuitting，实例字段残留，Phase 7 完整性测试发现）。
+        /// 注意：引擎不会为【开放泛型类型】调用 [RuntimeInitializeOnLoadMethod]
+        /// （已实测 Unity 2022.3.62f3c1）。真正的引擎入口在非泛型 RuntimeSessionReset，
+        /// 由静态构造函数把本重置注册进去；下面的特性仅作为静态审计器的重置标记保留。
         /// </summary>
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void RegisterQuitHandler()
+        static UnitySingleton()
         {
+            RuntimeSessionReset.Register(ResetSessionState);
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetSessionState()
+        {
+            _instance = null;
+            IsExisted = false;
             _isQuitting = false;
             Application.quitting -= OnApplicationQuitting;
             Application.quitting += OnApplicationQuitting;

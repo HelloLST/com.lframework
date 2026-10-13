@@ -28,7 +28,7 @@ namespace LFramework.Editor
         // 排除目录（框架内部、第三方、编辑器、测试、插件、StreamingAssets）
         private static readonly string[] ExcludeDirs =
         {
-            "/Core/", "/ThirdParty/", "/Editor/", "/Tests/", "/Plugins/", "/StreamingAssets/"
+            "/Core/", "/ThirdParty/", "/Editor/", "/Tests/", "/TestsPlayMode/", "/Plugins/", "/StreamingAssets/"
         };
 
         // 硬反模式（Error）：业务层禁止的跨系统查找 / 单例滥用
@@ -64,29 +64,79 @@ namespace LFramework.Editor
 
         private const string ExemptToken = "ARCH_EXEMPT";
 
-        /// <summary>构建时是否拦截：发现硬反模式则中止构建。默认关闭，避免误伤现有工程。</summary>
-        public static bool FailBuildOnHardViolation = false;
+        /// <summary>按工程持久化，默认关闭，避免误伤现有工程。</summary>
+        public static bool FailBuildOnHardViolation
+        {
+            get => EditorPrefs.GetBool(BuildBlockPreferenceKey, false);
+            set => EditorPrefs.SetBool(BuildBlockPreferenceKey, value);
+        }
 
-        // ---- 入口：全量扫描（菜单） ----
+        public static string BuildBlockPreferenceKey =>
+            "LFramework.ArchitectureGuardrail.FailBuild:" + Application.dataPath.Replace("\\", "/");
+
+        public static string ReportPath => Path.Combine(
+            Directory.GetParent(Application.dataPath).FullName, "Artifacts/ArchitectureGuardrail/report.json");
+
+        [System.Serializable]
+        public sealed class ScanReport
+        {
+            public string GeneratedAtUtc;
+            public bool FailBuildEnabled;
+            public int ScannedFiles;
+            public int Errors;
+            public int Warnings;
+            public int ReadFailures;
+            public List<Violation> Violations = new List<Violation>();
+        }
+
+        [System.Serializable]
+        public sealed class Violation
+        {
+            public string AssetPath;
+            public int Line;
+            public string Severity;
+            public string Hint;
+            public string Source;
+        }
+
+        // 全量扫描、构建和 CI 共用同一报告与规则。
         [MenuItem("Tools/LFramework/架构校验/全量扫描业务层")]
         public static void ScanAll()
         {
-            var files = Directory.GetFiles(ScriptRoot, "*.cs", SearchOption.AllDirectories);
-            int total = 0, errors = 0, warnings = 0;
-            foreach (var full in files)
-            {
-                string assetPath = ToAssetPath(full);
-                if (IsExcluded(assetPath)) continue;
-                total++;
-                var (e, w) = ScanFile(assetPath);
-                errors += e;
-                warnings += w;
-            }
+            var report = ScanProject();
+            Debug.Log($"[架构护栏] 扫描完成：{report.ScannedFiles} 个文件，{report.Errors} 个错误，{report.Warnings} 个提醒，{report.ReadFailures} 个读取失败。报告：{ReportPath}");
+        }
 
-            if (errors == 0 && warnings == 0)
-                Debug.Log($"[架构护栏] ✅ 业务层架构校验通过：未发现反模式（扫描业务层 {total} 个 .cs 文件）。");
-            else
-                Debug.Log($"[架构护栏] 扫描完成：业务层 {total} 个文件，{errors} 个错误，{warnings} 个提醒。");
+        public static ScanReport ScanProject(bool logViolations = true)
+        {
+            var report = new ScanReport
+            {
+                GeneratedAtUtc = System.DateTime.UtcNow.ToString("o"),
+                FailBuildEnabled = FailBuildOnHardViolation
+            };
+            // 空工程没有 Scripts 目录时，合法地产出零文件报告。
+            if (Directory.Exists(ScriptRoot))
+            {
+                var files = Directory.GetFiles(ScriptRoot, "*.cs", SearchOption.AllDirectories);
+                System.Array.Sort(files, System.StringComparer.Ordinal);
+                foreach (var full in files)
+                {
+                    var assetPath = ToAssetPath(full);
+                    if (IsExcluded(assetPath)) continue;
+                    report.ScannedFiles++;
+                    ScanFileIntoReport(assetPath, report, logViolations);
+                }
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(ReportPath));
+            File.WriteAllText(ReportPath, JsonUtility.ToJson(report, true), new System.Text.UTF8Encoding(false));
+            return report;
+        }
+
+        [MenuItem("Tools/LFramework/架构校验/构建时拦截反模式", true)]
+        private static bool ValidateBuildBlock()
+        {
+            Menu.SetChecked("Tools/LFramework/架构校验/构建时拦截反模式", FailBuildOnHardViolation);
+            return true;
         }
 
         // ---- 入口：构建前拦截（可选） ----
@@ -101,44 +151,42 @@ namespace LFramework.Editor
         // ---- 扫描单个文件，返回 (错误数, 提醒数) ----
         internal static (int errors, int warnings) ScanFile(string assetPath)
         {
+            var report = new ScanReport();
+            ScanFileIntoReport(assetPath, report, true);
+            return (report.Errors, report.Warnings);
+        }
+
+        private static void ScanFileIntoReport(string assetPath, ScanReport report, bool logViolations)
+        {
             string[] lines;
-            try
-            {
-                lines = File.ReadAllLines(assetPath);
-            }
+            try { lines = File.ReadAllLines(assetPath); }
             catch (System.Exception e)
             {
-                Debug.LogWarning($"[架构护栏] 无法读取 {assetPath}：{e.Message}");
-                return (0, 0);
+                report.ReadFailures++;
+                report.Violations.Add(new Violation { AssetPath = assetPath, Severity = "ReadFailure", Hint = e.Message });
+                if (logViolations) Debug.LogWarning($"[架构护栏] 无法读取 {assetPath}：{e.Message}");
+                return;
             }
-
-            int errors = 0, warnings = 0;
+            var softRules = GetSoftRules();
             for (int i = 0; i < lines.Length; i++)
             {
                 string line = lines[i];
                 if (line.Contains(ExemptToken)) continue;
-                int lineNo = i + 1;
-
                 foreach (var rule in HardRules)
                 {
-                    if (Regex.IsMatch(line, rule.Pattern))
-                    {
-                        Debug.LogError($"[架构护栏][错误] {assetPath}:{lineNo} — {rule.Hint}\n    {line.Trim()}");
-                        errors++;
-                    }
+                    if (!Regex.IsMatch(line, rule.Pattern)) continue;
+                    report.Errors++;
+                    report.Violations.Add(new Violation { AssetPath = assetPath, Line = i + 1, Severity = "Error", Hint = rule.Hint, Source = line.Trim() });
+                    if (logViolations) Debug.LogError($"[架构护栏][错误] {assetPath}:{i + 1} — {rule.Hint}\n    {line.Trim()}");
                 }
-
-                foreach (var rule in GetSoftRules())
+                foreach (var rule in softRules)
                 {
-                    if (Regex.IsMatch(line, rule.Pattern))
-                    {
-                        Debug.LogWarning($"[架构护栏][提醒] {assetPath}:{lineNo} — {rule.Hint}\n    {line.Trim()}");
-                        warnings++;
-                    }
+                    if (!Regex.IsMatch(line, rule.Pattern)) continue;
+                    report.Warnings++;
+                    report.Violations.Add(new Violation { AssetPath = assetPath, Line = i + 1, Severity = "Warning", Hint = rule.Hint, Source = line.Trim() });
+                    if (logViolations) Debug.LogWarning($"[架构护栏][提醒] {assetPath}:{i + 1} — {rule.Hint}\n    {line.Trim()}");
                 }
             }
-
-            return (errors, warnings);
         }
 
         internal static bool IsExcluded(string assetPath)
@@ -202,22 +250,11 @@ namespace LFramework.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
-            if (!ArchitectureGuardrail.FailBuildOnHardViolation) return;
-
-            var files = Directory.GetFiles(Application.dataPath + "/Scripts", "*.cs", SearchOption.AllDirectories);
-            int errors = 0;
-            foreach (var full in files)
-            {
-                string assetPath = full.Replace("\\", "/").Replace(Application.dataPath.Replace("\\", "/"), "Assets");
-                if (ArchitectureGuardrail.IsExcluded(assetPath)) continue;
-                errors += ArchitectureGuardrail.ScanFile(assetPath).errors;
-            }
-
-            if (errors > 0)
+            var scan = ArchitectureGuardrail.ScanProject(ArchitectureGuardrail.FailBuildOnHardViolation);
+            if (scan.FailBuildEnabled && (scan.Errors > 0 || scan.ReadFailures > 0))
             {
                 throw new BuildFailedException(
-                    $"[架构护栏] 构建被拦截：业务层存在 {errors} 处架构反模式。" +
-                    $"请先修复，或临时关闭菜单 Tools/LFramework/架构校验/构建时拦截反模式。");
+                    $"[架构护栏] 构建被拦截：{scan.Errors} 处架构反模式，{scan.ReadFailures} 个文件无法读取。报告：{ArchitectureGuardrail.ReportPath}");
             }
         }
     }

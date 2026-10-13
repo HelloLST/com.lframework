@@ -13,6 +13,14 @@ namespace LFramework
         private static T _cached;
         private static bool _loaded;
 
+        // 引擎不会为【开放泛型类型】调用 [RuntimeInitializeOnLoadMethod]（已实测 Unity 2022.3.62f3c1）。
+        // 真正的引擎入口在非泛型 RuntimeSessionReset，由静态构造函数注册；
+        // 下面的特性仅作为静态审计器的重置标记保留。
+        static ScriptableConfigCache()
+        {
+            RuntimeSessionReset.Register(ResetForNewSession);
+        }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetForNewSession()
         {
