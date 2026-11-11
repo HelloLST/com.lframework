@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -91,32 +91,43 @@ namespace LFramework
         }
 
         /// <summary>
-        /// 立即回收游戏对象
+        /// 立即回收游戏对象。
+        /// 返回是否**成功回收到池**（true = 进了所属池的空闲队列，可复用）。
+        ///
+        /// 打磨台账 F2：旧实现对"找不到所属池"的对象直接 <c>Destroy(go)</c> 且返回 void ——
+        /// 调用方完全无从得知自己刚 despawn 的东西被销毁了，还以为是回收成功、
+        /// 下次 Spawn 会复用。更糟的是这种对象通常来自别的池或根本不是池对象，
+        /// 静默销毁会连带掐掉别人的活对象。
+        /// 现在返回值 + 告警，让"没回收到池"这件事显形。
         /// </summary>
-        public void DespawnImmediate(GameObject go)
+        public bool DespawnImmediate(GameObject go)
         {
-            if (go == null) return;
+            if (go == null) return false;
 
             //尝试从映射中查找对象池（O(1) 查找）
             if (_objectToPool.TryGetValue(go, out ObjectPool pool))
             {
                 _objectToPool.Remove(go);
                 pool.Despawn(go);
+                return true;
             }
-            else
+
+            //映射中没有，尝试通过遍历查找（降级方案）
+            pool = FindPoolByUsedObject(go);
+            if (pool != null)
             {
-                //映射中没有，尝试通过遍历查找（降级方案）
-                pool = FindPoolByUsedObject(go);
-                if (pool != null)
-                {
-                    pool.Despawn(go);
-                }
-                else
-                {
-                    //找不到所属池，直接销毁
-                    Destroy(go);
-                }
+                pool.Despawn(go);
+                return true;
             }
+
+            // 找不到所属池：这不是本管理器的池对象（可能来自别的管理器、或根本没走池）。
+            // 仍然销毁（保持原有行为，避免泄漏），但必须留痕 ——
+            // 静默销毁会让"我明明 Despawn 了却还在漏"这类问题无从查起。
+            LogManager.Warning(
+                $"[ObjectPoolsManager] DespawnImmediate: 对象 {go.name} 不属于任何已登记的池，" +
+                "已直接销毁（不会被复用）。若它来自其他池管理器或未通过 Spawn 创建，请改用对应的回收入口。");
+            Destroy(go);
+            return false;
         }
 
         /// <summary>

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -113,6 +113,12 @@ namespace LFramework
             throw new NotImplementedException("[AddressablesLoader] LoadAll not implemented; use label-based loading via Addressables.LoadAssetsAsync");
         }
 
+        /// <summary>
+        /// Addressables 后端的 LoadAll 尚未实现，也就没有批量登记可归还（打磨台账 A1）。
+        /// 返回 0 表示"没有任何条目被归还"，不抛异常 —— 调用方在切后端的场景下不该因此崩溃。
+        /// </summary>
+        public int ReleaseAllFrom(string folderPath) => 0;
+
         public void AddRef(string path)
         {
             if (!_handles.ContainsKey(path)) return;
@@ -172,6 +178,15 @@ namespace LFramework
         public int GetCacheCount() => _handles.Count;
 
         public bool IsCached(string path) => _handles.ContainsKey(path);
+        /// <summary>仅当 handle 已完成且成功时返回其中的对象，不新增引用。</summary>
+        public bool TryPeek<T>(string path, out T asset) where T : UnityEngine.Object
+        {
+            asset = null;
+            if (!_handles.TryGetValue(path, out AsyncOperationHandle handle)) return false;
+            if (!handle.IsDone || handle.Status != AsyncOperationStatus.Succeeded) return false;
+            asset = handle.Result as T;
+            return asset != null;
+        }
 #else
         public T Load<T>(string path) where T : UnityEngine.Object
         {
@@ -193,6 +208,9 @@ namespace LFramework
             throw new NotSupportedException("[AddressablesLoader] USE_ADDRESSABLES 宏未启用");
         }
 
+        /// <summary>宏未启用时不存在可归还的登记项（打磨台账 A1）。</summary>
+        public int ReleaseAllFrom(string folderPath) => 0;
+
         public void UnloadUnusedAssets(Action callback = null) { }
         public void ReleaseAll() { }
         public void AddRef(string path) { }
@@ -204,6 +222,8 @@ namespace LFramework
         public string GetCacheInfo() => "[AddressablesLoader] USE_ADDRESSABLES 宏未启用";
         public int GetCacheCount() => 0;
         public bool IsCached(string path) => false;
+        /// <summary>Addressables 后端不缓存原始对象，peek 恒失败（句柄回退 LoadAsync）。</summary>
+        public bool TryPeek<T>(string path, out T asset) where T : UnityEngine.Object { asset = null; return false; }
 #endif
     }
 }

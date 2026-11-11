@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -108,6 +108,12 @@ namespace LFramework
         #region 写入器
         private List<ILogWriter> _writers = new List<ILogWriter>();
         private FileLogWriter _fileWriter;
+
+        /// <summary>
+        /// 是否已尝试过"按需建立 writer"（打磨台账 D1）。
+        /// 只尝试一次：真正的失败（如目录不可写）不该每写一条日志就重试一遍。
+        /// </summary>
+        private bool _writersEnsured;
         #endregion
 
         #region 私有变量
@@ -206,6 +212,19 @@ namespace LFramework
 
         private void InitializeWriters()
         {
+            // 可重入（打磨台账 D4 连带）：此前重复调用会不断往 _writers 里追加，
+            // 导致同一条日志被写多遍、旧文件句柄泄漏。运行时改配置后重建 writer
+            // 是合理需求，这里先释放旧 writer 再建。
+            if (_writers.Count > 0 || _fileWriter != null)
+            {
+                foreach (var w in _writers)
+                {
+                    try { w.Flush(); w.Close(); } catch { /* 释放失败不阻断重建 */ }
+                }
+                _writers.Clear();
+                _fileWriter = null;
+            }
+
             if (EnableConsole)
                 _writers.Add(new ConsoleLogWriter { MinLevel = MinLevel });
 
@@ -224,13 +243,33 @@ namespace LFramework
                         MinLevel = MinLevel,
                         Buffered = FlushMode == LogFlushMode.DoubleBuffer,
                         BufferCountThreshold = BufferCountThreshold,
-                        BufferTimeThreshold = BufferTimeThreshold
+                        BufferTimeThreshold = BufferTimeThreshold,
+                        // 打磨台账 D4：此前 MaxFileSizeBytes 只被赋值与回读，
+                        // 从未传给 writer，配置了却不生效。这里补上。
+                        MaxFileSizeBytes = MaxFileSizeBytes,
+                        MaxRollingFiles = Mathf.Max(1, SaveDays)
                     };
                     _writers.Add(_fileWriter);
                     CleanOldLogs(_logPath);
                     UnityEngine.Debug.Log($"[LogManager] 文件日志已初始化，路径: {_logPath}");
                 }
             }
+
+            // 建立完成即视为"已尝试过"（无论成功与否），
+            // 避免 D1 的按需路径对同一个失败的配置反复重试
+            _writersEnsured = true;
+        }
+
+        /// <summary>
+        /// 按当前配置重建所有写入器（打磨台账 D4 连带）。
+        /// 运行时改了 <see cref="MaxFileSizeBytes"/> / 刷盘阈值 / 级别后调用即可生效，
+        /// 不必重启。此前配置只在 Awake 生效一次，改完必须重启才看到效果。
+        /// </summary>
+        public void ReinitializeWriters()
+        {
+            // 重置"按需建立"标记：下次写入时若发现 writer 仍为空，允许再尝试一次（D1）
+            _writersEnsured = false;
+            InitializeWriters();
         }
 
         private void CleanOldLogs(string directory)
@@ -295,6 +334,32 @@ namespace LFramework
 
         private static void WriteToWriters(LogManager instance, LogEntry entry)
         {
+            // 打磨台账 D1：writer 只在 Awake 里建立。若 LogManager 被走到了**但 Awake 没执行**
+            // （典型：EditMode 里 AddComponent 不触发 Awake；或模块清单漏配后有人手工 new），
+            // _writers 就是空的 —— 所有日志静默消失，控制台一片安静，排查时完全看不出问题。
+            //
+            // 这里补一条**按需建立**路径：发现没有 writer 就建一次。
+            // 注意不能每次写日志都调（那会在同一帧反复重建文件句柄），
+            // 用 _writersEnsured 标记只尝试一次；真的建不起来也不反复尝试。
+            if (instance._writers.Count == 0 && !instance._writersEnsured)
+            {
+                instance._writersEnsured = true;   // 先置位：InitializeWriters 内部会打 Debug.Log，防递归
+                try
+                {
+                    instance.InitializeWriters();
+                    if (instance._writers.Count == 0)
+                    {
+                        // 配置里两个输出都关了：这本身是合法配置，不该告警
+                        UnityEngine.Debug.Log(
+                            "[LogManager] 控制台与文件输出均未启用，日志只会进 OnLogReceived / 远程上传。");
+                    }
+                }
+                catch (Exception e)
+                {
+                    UnityEngine.Debug.LogError($"[LogManager] 按需建立 writer 失败，后续日志将无处可写：{e}");
+                }
+            }
+
             foreach (var writer in instance._writers) { try { writer.Write(entry); } catch { } }
         }
 
@@ -446,11 +511,34 @@ namespace LFramework
         private const float BASE_RETRY_DELAY = 2f;
         private const float MAX_RETRY_DELAY = 60f;
 
-        private static readonly Queue<string> _pendingLogs = new Queue<string>();
-        private static readonly object _lockObj = new object();
+        /// <summary>
+        /// 待发队列的默认上限（D3 修复）。
+        ///
+        /// 原实现是无限 Queue：服务器不可达时，每条超阈值日志都往队列里塞，
+        /// 而消费端因为退避重试一直卡在第一批上原地打转 —— 生产端快、消费端停，
+        /// 队列就是纯粹的内存泄漏。灾难场景（服务器挂了 + 疯狂报错）下，
+        /// 日志系统自己会成为压死进程的最后一根稻草。
+        ///
+        /// 上限触发后丢弃**最旧**的日志（保留最近的现场更有排查价值），并记一次计数，
+        /// 后续可通过 <see cref="GetDroppedCount"/> 观测到底丢了多少。
+        /// </summary>
+        public const int DefaultMaxPendingLogs = 500;
+
+        private static readonly LogUploadQueue _pendingLogs = new LogUploadQueue(DefaultMaxPendingLogs);
         private static bool _isUploading = false;
         private static float _retryDelay = BASE_RETRY_DELAY;
         private static int _consecutiveFailures = 0;
+        private static bool _dropWarned;
+
+        /// <summary>待发队列上限。&lt;= 0 表示不限制（恢复旧行为，不建议）。</summary>
+        public static int MaxPendingLogs
+        {
+            get { return _pendingLogs.Capacity; }
+            set { _pendingLogs.Capacity = value; }
+        }
+
+        /// <summary>因队列超限被丢弃的日志条数（会话内累计）。</summary>
+        public static int GetDroppedCount() { return _pendingLogs.DroppedCount; }
 
         /// <summary>
         /// 进入 Play 时复位上传通道（Phase 9）。由 <see cref="LogManager.ResetStaticStateForNewSession"/> 调用。
@@ -463,19 +551,30 @@ namespace LFramework
         /// </summary>
         internal static void ResetForNewSession()
         {
-            lock (_lockObj) { _pendingLogs.Clear(); }
+            _pendingLogs.Clear();
             // _isUploading 停在 true 说明上一会话的 UploadLoop 已被域重载杀死，
             // 本会话必须允许重新启动；真正的并发启动由 _isUploading 自身守卫。
             _isUploading = false;
             _retryDelay = BASE_RETRY_DELAY;
             _consecutiveFailures = 0;
+            _dropWarned = false;
         }
 
         public static void UploadLog(string message, string stackTrace, LogLevel level)
         {
             if (!EnableUpload || string.IsNullOrEmpty(UploadUrl) || level < UploadLevel) return;
             string content = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}][{level}] {message}\n{stackTrace}\n";
-            lock (_lockObj) { _pendingLogs.Enqueue(content); }
+
+            int dropped = _pendingLogs.Enqueue(content);
+
+            // 只在本会话第一次丢弃时提示一次：否则日志系统会变成自己的日志洪水来源
+            if (dropped > 0 && !_dropWarned)
+            {
+                _dropWarned = true;
+                LogManager.Warning(
+                    $"[LogUploader] 待发队列超过上限 {MaxPendingLogs}，已丢弃最旧的日志（后续丢弃只计数，见 GetDroppedCount）");
+            }
+
             StartUpload();
         }
 
@@ -494,8 +593,7 @@ namespace LFramework
             {
                 while (true)
                 {
-                    List<string> batch = new List<string>();
-                    lock (_lockObj) { while (_pendingLogs.Count > 0 && batch.Count < 10) batch.Add(_pendingLogs.Dequeue()); }
+                    List<string> batch = _pendingLogs.DequeueBatch(10);
                     if (batch.Count == 0) return;
 
                     string content = string.Join("\n", batch);
@@ -509,14 +607,15 @@ namespace LFramework
                         if (_consecutiveFailures > MAX_RETRIES)
                         {
                             // 连续失败超过上限：丢弃该批日志并重置，避免队列无限膨胀
-                            Debug.LogError($"[LogUploader] 连续上传失败 {MAX_RETRIES} 次，丢弃 {batch.Count} 条日志");
+                            Debug.LogError($"[LogUploader] 连续上传失败 {MAX_RETRIES} 次，丢弃 {batch.Count} 条日志 LOGSCAN_EXPECTED");
                             _consecutiveFailures = 0;
                             _retryDelay = BASE_RETRY_DELAY;
                             return;
                         }
 
-                        // 失败重入队 + 指数退避后原地重试
-                        lock (_lockObj) { foreach (var log in batch) _pendingLogs.Enqueue(log); }
+                        // 失败重入队 + 指数退避后原地重试。
+                        // D3：必须回到**队首** —— 它们是当前最旧的现场，放队尾会被新日志挤掉。
+                        _pendingLogs.RequeueAtHead(batch);
                         Debug.LogWarning($"[LogUploader] 上传失败，{_retryDelay:0.#}s 后重试");
                         await UniTask.Delay(TimeSpan.FromSeconds(_retryDelay));
                         _retryDelay = Mathf.Min(_retryDelay * 2, MAX_RETRY_DELAY);
@@ -557,7 +656,7 @@ namespace LFramework
             return request.result == UnityEngine.Networking.UnityWebRequest.Result.Success;
         }
 
-        public static int GetPendingCount() { lock (_lockObj) return _pendingLogs.Count; }
+        public static int GetPendingCount() { return _pendingLogs.Count; }
         public static bool CheckConnection() => !string.IsNullOrEmpty(UploadUrl);
         public static bool TestConnectionSync() => CheckConnection();
         public static void ForceRetry() { if (EnableUpload && !string.IsNullOrEmpty(UploadUrl)) UploadLocalLogsAsync().Forget(); }

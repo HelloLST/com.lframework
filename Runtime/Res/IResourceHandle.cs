@@ -40,7 +40,18 @@ namespace LFramework
 
         public string Path { get; }
 
-        public T Get<T>() where T : UnityEngine.Object => _manager.Load<T>(Path);
+        /// <summary>
+        /// 取资源。
+        ///
+        /// 语义约定（打磨台账 A4 修复时必须同步改这里）：**句柄已持有资源，
+        /// <c>Get</c> 只是取出来用，不得产生新的持有**。
+        ///
+        /// 旧实现直接调 <c>_manager.Load&lt;T&gt;(Path)</c> —— 在 A4 之前"缓存命中不加计数"，
+        /// 恰好无害；A4 改成"缓存命中计一次隐式持有"之后，每调一次 <c>Get</c> 就多一次
+        /// 永远不还的隐式持有，而 <c>Dispose</c> 只归还那一次显式引用 → **计数只增不减，资源永不释放**。
+        /// 这正是引入精确计数后必须一并修正的配套语义。
+        /// </summary>
+        public T Get<T>() where T : UnityEngine.Object => _manager.Peek<T>(Path);
 
         public void Dispose()
         {

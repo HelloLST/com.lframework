@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
@@ -23,6 +23,16 @@ namespace LFramework
         private readonly LinkedList<string> _lruList = new LinkedList<string>();
         private readonly Dictionary<string, ResourceRequest> _loadingRequests = new Dictionary<string, ResourceRequest>();
 
+        /// <summary>
+        /// LoadAll 的分组登记：目录 → 这次加载登记过的缓存 key 列表（打磨台账 A1）。
+        ///
+        /// 为什么必须单独记一份，而不能靠"folder/资源名"推导路径：
+        /// <c>Resources.LoadAll</c> 是**递归**的，运行时又拿不到资源的真实子路径
+        /// （AssetDatabase 只在编辑器可用）。递归目录下推导出的 key 与真实路径不符，
+        /// 靠它归还就会漏。分组记录的是"这次到底登记了哪几条"，与路径推导彻底解耦。
+        /// </summary>
+        private readonly Dictionary<string, List<string>> _loadAllGroups = new Dictionary<string, List<string>>();
+
         private int _maxCacheCount = 100;
         private float _autoCleanupInterval = 60f;
         private CancellationTokenSource _cleanupCts;
@@ -44,6 +54,10 @@ namespace LFramework
             {
                 UpdateLRU(path);
                 cachedItem.LastAccessTime = DateTime.Now;
+                // 打磨台账 A4：缓存命中也要计一次隐式持有。
+                // 旧实现不计数，导致"Load 两次、Release 一次"时资源被立刻卸载，
+                // 而调用方以为自己还持有一份 —— 典型的悬空引用。
+                cachedItem.AddImplicit();
                 return cachedItem.Asset as T;
             }
 
@@ -60,7 +74,77 @@ namespace LFramework
 
         public T[] LoadAll<T>(string path) where T : UnityEngine.Object
         {
-            return Resources.LoadAll<T>(path);
+            if (string.IsNullOrEmpty(path))
+            {
+                LogManager.Error("[ResourcesLoader] LoadAll failed: path is null or empty");
+                return Array.Empty<T>();
+            }
+            T[] assets = Resources.LoadAll<T>(path);
+            if (assets == null || assets.Length == 0)
+            {
+                LogManager.Warning($"[ResourcesLoader] LoadAll 未加载到任何资源: {path}");
+                return assets ?? Array.Empty<T>();
+            }
+
+            // 打磨台账 A1：旧实现直接 `return Resources.LoadAll<T>(path)`，资源**不进缓存、
+            // 不计引用**。业务拿到一批图后，这批资源在框架眼里根本不存在 ——
+            // IsCached 恒 false，LRU 看不见，ReleaseUnused 管不到，容量策略也摸不着。
+            // 结果是想按容量回收回收不掉，只能靠 Resources.UnloadUnusedAssets 全量兜底。
+            //
+            // 现在逐个登记进缓存：每个资源各计一次隐式持有。
+            //
+            // ⚠️ 路径推导的固有限制（必须知道，否则会误用）：
+            // `Resources.LoadAll` 是**递归**的，而运行时没有 API 能拿到某个资源的真实子路径
+            // （编辑器的 AssetDatabase.GetAssetPath 在打包后不可用）。因此这里只能用
+            // `folder/资源名` 作为登记 key —— 对"目录下直接放资源"的常见用法是准确的，
+            // 对递归加载则只是 best-effort（真实路径可能是 folder/sub/资源名）。
+            // 正因如此，**归还必须走 <see cref="ReleaseAllFrom"/> 的分组登记**，
+            // 不能依赖自己拼路径 —— 分组记录的是"这次 LoadAll 到底登记了哪几条"，与路径推导无关。
+            string folder = path.TrimEnd('/');
+            List<string> group = null;
+
+            for (int i = 0; i < assets.Length; i++)
+            {
+                T asset = assets[i];
+                if (asset == null) continue;
+
+                string key = RegisterLoadedAsset(folder, asset);
+                if (key == null) continue;
+
+                group ??= new List<string>();
+                if (!group.Contains(key)) group.Add(key);
+            }
+
+            if (group != null)
+            {
+                // 同一目录重复 LoadAll 时追加到已有分组（持有是累加的，归还也要能累加）
+                if (_loadAllGroups.TryGetValue(folder, out List<string> existing))
+                {
+                    for (int i = 0; i < group.Count; i++)
+                        if (!existing.Contains(group[i])) existing.Add(group[i]);
+                }
+                else
+                {
+                    _loadAllGroups[folder] = group;
+                }
+            }
+
+            return assets;
+        }
+
+        /// <summary>
+        /// 拼出某个资源在 <see cref="LoadAll{T}"/> 之后**登记的缓存路径**（best-effort）。
+        ///
+        /// ⚠️ 这只在"资源直接位于该目录下"时准确。递归加载时真实路径可能更深，
+        /// 此处无法得知（运行时无 API）。**归还请用 <see cref="ReleaseAllFrom"/>** ——
+        /// 它走分组登记，不依赖路径推导。
+        /// </summary>
+        public static string MakeAssetCachePath(string folderPath, UnityEngine.Object asset)
+        {
+            if (string.IsNullOrEmpty(folderPath)) return asset != null ? asset.name : string.Empty;
+            if (asset == null) return folderPath.TrimEnd('/');
+
+            return folderPath.TrimEnd('/') + "/" + asset.name;
         }
 
         public void LoadAsync<T>(string path, Action<T> callback) where T : UnityEngine.Object
@@ -80,13 +164,27 @@ namespace LFramework
             {
                 UpdateLRU(path);
                 cachedItem.LastAccessTime = DateTime.Now;
+                cachedItem.AddImplicit();   // 同 Load：缓存命中计一次隐式持有（A4）
                 return cachedItem.Asset as T;
             }
 
             if (_loadingRequests.TryGetValue(path, out ResourceRequest existingRequest))
             {
                 await existingRequest.ToUniTask();
-                return existingRequest.asset as T;
+                var existingAsset = existingRequest.asset;
+                if (existingAsset == null)
+                {
+                    // 打磨台账 A4 附带：并发等待失败时也要有 Warning，
+                    // 旧实现只有"首个加载者"那条路径会告警，等待者静默拿到 null。
+                    LogManager.Warning($"[ResourcesLoader] LoadAsync failed (并发等待方): {path}");
+                    return null;
+                }
+                // 并发场景下缓存可能已被首个加载者写入，这里补记隐式持有
+                if (_cache.TryGetValue(path, out ResourceCacheItem waiterItem))
+                {
+                    waiterItem.AddImplicit();
+                }
+                return existingAsset as T;
             }
 
             ResourceRequest request = Resources.LoadAsync<T>(path);
@@ -136,6 +234,7 @@ namespace LFramework
             }
             _cache.Clear();
             _lruList.Clear();
+            _loadAllGroups.Clear();
         }
 
         #region 缓存管理
@@ -150,18 +249,73 @@ namespace LFramework
         public bool IsCached(string path) => _cache.ContainsKey(path);
 
         /// <summary>
-        /// 归还一次隐式加载引用（与 Load/LoadAsync 配对）。
+        /// 只读地从缓存取资源，**不新增任何持有、不触发加载**（打磨台账 A4）。
+        /// 供 <see cref="ResourceHandle.Get{T}"/> 使用：句柄已经持有资源，
+        /// 再读一次不应变成第二份持有。
+        /// 未命中返回 false。
+        /// </summary>
+        public bool TryPeek<T>(string path, out T asset) where T : UnityEngine.Object
+        {
+            asset = null;
+            if (string.IsNullOrEmpty(path)) return false;
+            if (!_cache.TryGetValue(path, out ResourceCacheItem item)) return false;
+
+            asset = item.Asset as T;
+            // 读取不算"使用"吗？算 —— 更新 LRU，但**不动引用计数**。
+            UpdateLRU(path);
+            item.LastAccessTime = DateTime.Now;
+            return asset != null;
+        }
+
+        /// <summary>
+        /// 归还一次隐式加载引用（与 Load / LoadAsync 配对）。
         /// 若仍有显式引用（AddRef 未配对 ReleaseRef）钉着，则只扣减、不卸载。
+        ///
+        /// 打磨台账 A4：旧实现有两类静默失败 ——
+        ///   1) 路径不在缓存里（拼错 / 从未加载 / 已被淘汰）→ 直接 `return`，调用方毫不知情；
+        ///   2) 重复 Release（隐式持有已归零）→ 继续扣减，把显式引用也一并吃掉。
+        /// 两者都会让资源收支永远对不上，而 `GetCacheCount` 看不出任何异常。
+        /// 现在区分「未缓存」与「重复归还」两种情况并显式告警。
         /// </summary>
         public void Release(string path)
         {
-            if (string.IsNullOrEmpty(path)) return;
-            if (_cache.TryGetValue(path, out ResourceCacheItem item))
+            if (string.IsNullOrEmpty(path))
             {
-                if (item.RefCount <= 1)
-                    ReleaseResource(path, item);   // 只剩隐式持有 → 归还并卸载
-                else
-                    item.ReleaseRef();             // 显式引用仍在 → 只归还隐式引用
+                LogManager.Warning("[ResourcesLoader] Release failed: path is null or empty");
+                return;
+            }
+
+            // 打磨台账 A1：目录形式（LoadAll 用过的 path）→ 整体归还该目录下的登记项。
+            // 业务逐个拼子路径既啰嗦又容易漏，漏一个就是永久泄漏。
+            if (!_cache.ContainsKey(path) && ReleaseFolder(path.TrimEnd('/'), warnIfEmpty: false) > 0)
+                return;
+
+            if (!_cache.TryGetValue(path, out ResourceCacheItem item))
+            {
+                // 不在缓存：可能是路径拼错、从未 Load、或已被 LRU 淘汰。
+                // 淘汰后调用 Release 是**合法**的（资源本来就不在了），所以用 Warning 而非 Error，
+                // 但必须留痕 —— 否则"我明明 Release 了"这种争论无法定案。
+                LogManager.Warning(
+                    $"[ResourcesLoader] Release 了未缓存的资源: {path}" +
+                    "（可能路径拼错、从未 Load，或已被容量淘汰）。本次调用无效果。");
+                return;
+            }
+
+            // 隐式持有已归零 = 重复 Release。此时不能再扣 RefCount，
+            // 否则会把别人的显式 AddRef 吃光，导致资源被提前卸载。
+            if (!item.TryReleaseImplicit())
+            {
+                LogManager.Warning(
+                    $"[ResourcesLoader] 重复 Release（隐式持有已为 0）: {path}，当前 RefCount={item.RefCount}。" +
+                    "本次调用无效果；请检查 Load 与 Release 是否成对。");
+                return;
+            }
+
+            item.ReleaseRef();   // 归还这一次隐式持有对应的计数
+
+            if (item.RefCount <= 0)
+            {
+                ReleaseResource(path, item);   // 已无任何持有 → 卸载
             }
         }
 
@@ -169,6 +323,79 @@ namespace LFramework
         {
             if (_cache.TryGetValue(path, out ResourceCacheItem item))
                 item.AddRef();
+        }
+
+        /// <summary>
+        /// 归还 <see cref="LoadAll{T}"/> 在 <paramref name="folderPath"/> 下登记的所有资源各一次持有，
+        /// 返回实际归还的条数（打磨台账 A1）。
+        ///
+        /// 为什么需要专用方法而不是让调用方自己拼路径：一个目录通常几十个资源，
+        /// 逐个 Release 既啰嗦又容易漏；而漏掉的持有永远不会归零，资源就永久留在缓存里。
+        /// </summary>
+        public int ReleaseAllFrom(string folderPath)
+        {
+            if (string.IsNullOrEmpty(folderPath)) return 0;
+            return ReleaseFolder(folderPath.TrimEnd('/'), warnIfEmpty: true);
+        }
+
+        /// <summary>
+        /// 归还某个目录下所有登记项各一次隐式持有，返回归还条数。
+        ///
+        /// 优先走 <see cref="_loadAllGroups"/> 的分组登记（精确，且对递归加载也成立）；
+        /// 分组里没有时才回退到"按前缀匹配直接子项"（兼容手动拼路径登记的场景）。
+        /// </summary>
+        private int ReleaseFolder(string folder, bool warnIfEmpty)
+        {
+            if (string.IsNullOrEmpty(folder)) return 0;
+
+            var matches = new List<string>();
+
+            // 1. 分组登记：LoadAll 精确记录过的那批 key
+            if (_loadAllGroups.TryGetValue(folder, out List<string> group))
+            {
+                matches.AddRange(group);
+                _loadAllGroups.Remove(folder);
+            }
+
+            // 2. 回退：按前缀匹配的直接子项（不含更深层级）
+            string prefix = folder + "/";
+            foreach (var kvp in _cache)
+            {
+                if (!kvp.Key.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                if (kvp.Key.IndexOf('/', prefix.Length) >= 0) continue;
+                if (!matches.Contains(kvp.Key)) matches.Add(kvp.Key);
+            }
+
+            if (matches.Count == 0)
+            {
+                if (warnIfEmpty)
+                {
+                    LogManager.Warning(
+                        $"[ResourcesLoader] ReleaseAllFrom 未找到任何登记项: {folder}。" +
+                        "请确认传的是 LoadAll 用过的目录路径（不带尾部斜杠），且资源未被容量淘汰。");
+                }
+                return 0;
+            }
+
+            int released = 0;
+            for (int i = 0; i < matches.Count; i++)
+            {
+                string key = matches[i];
+                if (!_cache.TryGetValue(key, out ResourceCacheItem item)) continue;
+
+                if (!item.TryReleaseImplicit())
+                {
+                    LogManager.Warning($"[ResourcesLoader] ReleaseAllFrom: {key} 的隐式持有已为 0，跳过。");
+                    continue;
+                }
+
+                item.ReleaseRef();
+                released++;
+
+                if (item.RefCount <= 0) ReleaseResource(key, item);
+            }
+
+            return released;
         }
 
         public void ReleaseRef(string path)
@@ -190,6 +417,33 @@ namespace LFramework
             var item = new ResourceCacheItem(asset, path);
             _cache[path] = item;
             _lruList.AddLast(path);
+        }
+
+        /// <summary>
+        /// 登记一个已加载的资源（<see cref="LoadAll{T}"/> 用），返回它在缓存里的 key（失败返回 null）。
+        /// 每个资源计一次隐式持有。
+        /// 与 <see cref="AddToCache"/> 的区别：已存在的条目**累加持有**而不是覆盖 ——
+        /// 重复 LoadAll 同一目录应产生 N 次隐式持有、需 N 次 Release 归还，
+        /// 直接覆盖会让之前的持有凭空消失。
+        /// </summary>
+        private string RegisterLoadedAsset(string folder, UnityEngine.Object asset)
+        {
+            if (string.IsNullOrEmpty(folder) || asset == null) return null;
+
+            string key = MakeAssetCachePath(folder, asset);
+            if (string.IsNullOrEmpty(key)) return null;
+
+            if (_cache.TryGetValue(key, out ResourceCacheItem existing))
+            {
+                // 已被单点 Load 缓存过（或上一次 LoadAll 登记过）：同一资源，再计一次隐式持有
+                existing.AddImplicit();
+                UpdateLRU(key);
+                existing.LastAccessTime = DateTime.Now;
+                return key;
+            }
+
+            AddToCache(key, asset);
+            return key;
         }
 
         private void UpdateLRU(string path)

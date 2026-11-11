@@ -46,6 +46,41 @@ namespace LFramework
         /// <summary>是否已完成初始化</summary>
         public bool IsInitialized { get; private set; }
 
+        /// <summary>
+        /// 初始化过程中失败的模块（typeName → 异常）。
+        ///
+        /// 修复（打磨台账 C1）：此前单模块 <c>InitializeAsync</c> 抛异常只 log 后继续，
+        /// 最终仍无条件 <c>IsInitialized = true</c>，业务等到了"初始化完成"却不知道
+        /// 某个模块是坏的 —— 典型的"启动看着正常、用起来才炸"。
+        /// 现在失败被显式收集，<see cref="IsInitialized"/> 表示"流程走完"而非"全部成功"，
+        /// 调用方可据此决定是否中断启动。
+        /// </summary>
+        public IReadOnlyDictionary<string, Exception> FailedModules => _failedModules;
+        private readonly Dictionary<string, Exception> _failedModules = new Dictionary<string, Exception>();
+
+        /// <summary>
+        /// 因依赖不可用而**被跳过**的模块（typeName → 原因）。
+        ///
+        /// 修复（打磨台账 C2）：此前 <c>dependsOn</c> 只参与拓扑排序，
+        /// **不校验"依赖方是否真的初始化成功"**。于是 A 依赖 B、B 初始化失败时，
+        /// A 照样初始化 —— 它拿到的 <c>GetModule&lt;B&gt;()</c> 是 null，
+        /// 运行到第一次使用才炸，堆栈指向 A 的业务代码，看不出根因在 B。
+        ///
+        /// 现在依赖不满足的模块**根本不创建实例**（避免 MonoBehaviour 的 Awake 先跑一遍），
+        /// 而是记进这里，并可在 <see cref="GetModule{T}"/> 时给出明确原因。
+        /// </summary>
+        public IReadOnlyDictionary<string, string> SkippedModules => _skippedModules;
+        private readonly Dictionary<string, string> _skippedModules = new Dictionary<string, string>();
+
+        /// <summary>
+        /// 所有"已创建且（若实现 IModule）初始化成功"的 typeName。
+        /// 依赖校验的唯一依据：<c>dependsOn</c> 里的每一项都必须在这里面。
+        /// </summary>
+        private readonly HashSet<string> _availableTypeNames = new HashSet<string>();
+
+        /// <summary>是否存在初始化失败或被跳过的模块。</summary>
+        public bool HasFailures => _failedModules.Count > 0 || _skippedModules.Count > 0;
+
         /// <summary>缓存的 MonoManager 引用，用于统一逐帧派发</summary>
         private MonoManager _monoManager;
 
@@ -72,10 +107,16 @@ namespace LFramework
             {
                 var entry = sortedEntries[i];
 
+                // 依赖校验必须在**创建实例之前**做。
+                // MonoBehaviour 模块一旦 AddComponent，Awake 立刻执行并可能访问别的模块；
+                // 等创建完再判断"要不要初始化"，那时副作用已经发生了。
+                if (!TryValidateDependencies(entry)) continue;
+
                 Type type = ResolveType(entry.typeName);
                 if (type == null)
                 {
                     LogManager.Error($"[ModuleManager] 无法解析类型: {entry.typeName} (条目: \"{entry.displayName}\")，跳过。");
+                    _skippedModules[entry.typeName] = "类型无法解析";
                     continue;
                 }
 
@@ -83,6 +124,7 @@ namespace LFramework
                 if (instance == null)
                 {
                     LogManager.Error($"[ModuleManager] 创建实例失败: {entry.typeName}，跳过。");
+                    _skippedModules[entry.typeName] = "实例创建失败";
                     continue;
                 }
 
@@ -90,19 +132,28 @@ namespace LFramework
 
                 if (instance is IModule module)
                 {
-                    _modules.Add(module);
                     try
                     {
                         await module.InitializeAsync();
+                        _modules.Add(module);
+                        _availableTypeNames.Add(entry.typeName);
                         LogManager.Info($"[ModuleManager] 模块已初始化 ({i + 1}/{sortedEntries.Count}): {module.DisplayName}");
                     }
                     catch (Exception e)
                     {
-                        LogManager.Error($"[ModuleManager] 模块初始化异常: {entry.typeName}\n{e}");
+                        // 修复（打磨台账 C1）：失败模块**不进 Tick 派发列表**，并记录到
+                        // FailedModules 供调用方查询。此前它既被加进 _modules 参与每帧 Tick，
+                        // 又让 IsInitialized 照样为 true，坏模块会以半初始化状态持续运行。
+                        _failedModules[entry.typeName] = e;
+                        LogManager.Error(
+                            $"[ModuleManager] 模块初始化失败，已从 Tick 列表移除: {entry.typeName} ({module.DisplayName})\n" +
+                            $"依赖它的模块将被跳过（见 SkippedModules）。\n{e}");
                     }
                 }
                 else
                 {
+                    // 非 IModule 没有初始化契约，创建成功即视为可用
+                    _availableTypeNames.Add(entry.typeName);
                     LogManager.Info($"[ModuleManager] 模块已创建 (非 IModule): {type.Name}");
                 }
             }
@@ -121,7 +172,92 @@ namespace LFramework
                 LogManager.Warning("[ModuleManager] 未找到 MonoManager，ITickable 将不会被调用。请确保清单中包含 MonoManager。");
             }
 
-            LogManager.Info($"[ModuleManager] 全部模块初始化完成，共 {_modules.Count} 个 IModule + {_instancesByTypeName.Count - _modules.Count} 个非 IModule。");
+            if (HasFailures)
+            {
+                // 分别报告"失败"与"被跳过"：两者处置方式不同 ——
+                // 失败的需要看异常栈，被跳过的需要看依赖链。
+                var parts = new List<string>();
+                if (_failedModules.Count > 0)
+                    parts.Add($"{_failedModules.Count} 个初始化失败：{string.Join(", ", _failedModules.Keys)}");
+                if (_skippedModules.Count > 0)
+                    parts.Add($"{_skippedModules.Count} 个因依赖不可用被跳过：{string.Join(", ", _skippedModules.Keys)}");
+
+                LogManager.Error(
+                    $"[ModuleManager] 初始化结束，但存在异常模块 —— {string.Join("；", parts)}。" +
+                    "请检查 FailedModules / SkippedModules 或上方错误日志。");
+            }
+            else
+            {
+                LogManager.Info($"[ModuleManager] 全部模块初始化完成，共 {_modules.Count} 个 IModule + {_instancesByTypeName.Count - _modules.Count} 个非 IModule。");
+            }
+
+        }
+
+        /// <summary>
+        /// 校验条目的 <c>dependsOn</c> 是否全部可用（C2）。
+        ///
+        /// 判定依据是 <see cref="_availableTypeNames"/> —— 只有**真正初始化成功**的模块才在里面。
+        /// 因此「依赖项不在清单里」「依赖项被禁用」「依赖项初始化抛异常」三种情况
+        /// 都会导致本模块被跳过，而不再是一路绿灯往下跑。
+        ///
+        /// 之所以要**连带跳过间接依赖**：A→B→C，C 挂了，B 被跳过，
+        /// 那么 A 的依赖也是坏的。因为按拓扑序处理，B 被跳过时不会进
+        /// <see cref="_availableTypeNames"/>，A 的校验自然也会失败，无需额外传播逻辑。
+        /// </summary>
+        private bool TryValidateDependencies(ModuleEntry entry)
+        {
+            if (entry.dependsOn == null || entry.dependsOn.Length == 0) return true;
+
+            string missing = null;
+            for (int i = 0; i < entry.dependsOn.Length; i++)
+            {
+                string dep = entry.dependsOn[i];
+                if (string.IsNullOrEmpty(dep)) continue;
+                if (_availableTypeNames.Contains(dep)) continue;
+
+                missing = dep;
+                break;
+            }
+
+            if (missing == null) return true;
+
+            string reason = BuildDependencyFailureReason(missing);
+            _skippedModules[entry.typeName] = reason;
+
+            LogManager.Error(
+                $"[ModuleManager] 模块 \"{entry.displayName}\" ({entry.typeName}) 被跳过：{reason}\n" +
+                $"跳过是安全的 —— 该模块的 InitializeAsync 不会执行，" +
+                $"GetModule<{ShortName(entry.typeName)}>() 会返回 null 并给出这条原因。");
+
+            return false;
+        }
+
+        /// <summary>把"依赖为什么不可用"翻译成一句能直接定位问题的话。</summary>
+        private string BuildDependencyFailureReason(string dependencyTypeName)
+        {
+            if (_failedModules.TryGetValue(dependencyTypeName, out Exception depError))
+            {
+                return $"依赖的模块 {dependencyTypeName} 初始化失败（{depError.GetType().Name}: {depError.Message}）";
+            }
+
+            if (_skippedModules.TryGetValue(dependencyTypeName, out string transitive))
+            {
+                return $"依赖的模块 {dependencyTypeName} 自身也被跳过（{transitive}）";
+            }
+
+            if (_instancesByTypeName.ContainsKey(dependencyTypeName))
+            {
+                return $"依赖的模块 {dependencyTypeName} 已创建但尚未就绪";
+            }
+
+            return $"依赖的模块 {dependencyTypeName} 不在清单中或未启用";
+        }
+
+        private static string ShortName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "?";
+            int dot = typeName.LastIndexOf('.');
+            return dot >= 0 && dot < typeName.Length - 1 ? typeName.Substring(dot + 1) : typeName;
         }
 
         /// <summary>按 typeName 获取已创建的模块实例</summary>
@@ -130,6 +266,25 @@ namespace LFramework
             string typeName = typeof(T).FullName;
             if (typeName != null && _instancesByTypeName.TryGetValue(typeName, out var instance))
                 return instance as T;
+
+            // 修复（打磨台账 C2）：模块因为依赖坏掉而被跳过时，这里必须说明原因。
+            // 否则业务拿到一个裸 null，堆栈指向自己的代码，完全看不出根因在别的模块。
+            if (typeName != null && _skippedModules.TryGetValue(typeName, out string skipReason))
+            {
+                LogManager.Warning(
+                    $"[ModuleManager] GetModule<{typeof(T).Name}>() 返回 null —— 该模块因依赖不可用已被跳过：{skipReason}");
+                return null;
+            }
+
+            // 修复（打磨台账 C3）：未初始化时返回 null 且完全无提示，业务在 Awake 里调用
+            // 会得到 NullReferenceException，而堆栈指向业务代码 —— 看不出根因是"模块还没初始化"。
+            // 这里只在**确实没初始化**时提示，避免"模块从未在清单中"这种正常情况刷屏。
+            if (!IsInitialized)
+            {
+                LogManager.Warning(
+                    $"[ModuleManager] GetModule<{typeof(T).Name}>() 在模块初始化完成前被调用，返回 null。" +
+                    "如果你在 Awake 里取模块，请改到 InitializeAsync 之后（或等待 IsInitialized）。");
+            }
             return null;
         }
 
@@ -176,6 +331,9 @@ namespace LFramework
             }
             _modules.Clear();
             _instancesByTypeName.Clear();
+            _failedModules.Clear();
+            _skippedModules.Clear();
+            _availableTypeNames.Clear();
             IsInitialized = false;
         }
 

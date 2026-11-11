@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
@@ -112,11 +112,12 @@ namespace LFramework
         }
 
         /// <summary>
-        /// 立即将游戏对象回收进对象池
+        /// 立即将游戏对象回收进对象池。
+        /// 返回是否成功回收到池（false = 不属于任何池，已被直接销毁，不会复用）—— 打磨台账 F2。
         /// </summary>
-        public static void DespawnImmediate(this GameObject go)
+        public static bool DespawnImmediate(this GameObject go)
         {
-            ObjectPoolsManager.Instance.DespawnImmediate(go);
+            return ObjectPoolsManager.Instance.DespawnImmediate(go);
         }
 
         /// <summary>

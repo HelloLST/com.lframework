@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -41,6 +41,29 @@ namespace LFramework
 
         public IResourceLoader GetLoader() => Loader;
 
+        /// <summary>
+        /// 只读地从缓存取资源，**不产生任何新的持有**（打磨台账 A4）。
+        ///
+        /// 用途：<see cref="IResourceHandle.Get{T}"/> —— 句柄已经持有资源，
+        /// 再取一次只是"读出来用"，不应该变成又一份持有。
+        /// 旧实现走 <c>Load</c>，在 A4 引入精确计数后会导致"每调一次 Get 就多一份
+        /// 永不归还的隐式持有"，资源永不释放。
+        ///
+        /// 资源不在缓存时（已被容量淘汰）退回一次正常 Load，让句柄仍可用，
+        /// 并记 Warning —— 句柄钉住的资源本不该被淘汰，出现即说明容量配置有问题。
+        /// </summary>
+        internal T Peek<T>(string path) where T : UnityEngine.Object
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+
+            if (Loader.TryPeek<T>(path, out T cached)) return cached;
+
+            LogManager.Warning(
+                $"[ResourcesManager] 句柄持有的资源已不在缓存中: {path}。" +
+                "可能是容量上限过小，或句柄生命周期长于缓存条目；已重新加载一次。");
+            return Loader.Load<T>(path);
+        }
+
         #region 加载
 
         public T Load<T>(string path) where T : UnityEngine.Object
@@ -51,6 +74,20 @@ namespace LFramework
         public T[] LoadAll<T>(string path) where T : UnityEngine.Object
         {
             return Loader.LoadAll<T>(path);
+        }
+
+        /// <summary>
+        /// 归还 <see cref="LoadAll{T}"/> 在 <paramref name="folderPath"/> 下登记的所有资源，返回归还条数
+        /// （打磨台账 A1）。
+        ///
+        /// LoadAll 现在会逐个登记进缓存并各计一次隐式持有，因此**必须归还**，
+        /// 否则这批资源永远留在缓存里、容量策略也回收不掉。
+        /// </summary>
+        public int ReleaseAllFrom(string folderPath)
+        {
+            return Loader is ResourcesLoader concrete
+                ? concrete.ReleaseAllFrom(folderPath)
+                : 0;
         }
 
         public void LoadAsync<T>(string path, Action<T> callback) where T : UnityEngine.Object

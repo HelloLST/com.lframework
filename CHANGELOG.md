@@ -5,8 +5,107 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.3] - 2026-11-11
 
+> **试吃期第三轮至第七轮的集中发布。** 修复 16 项框架缺陷（含 17 项连带修复），
+> 全部带回归测试并做过反向验证（临时还原缺陷 → 确认测试确实失败），累计测试基线
+> EditMode 94 + PlayMode 87 = **181 条全绿**。
+>
+> 这批缺陷的共同特征：**测试全绿也发现不了**。没有一项是"必崩"的 P0，
+> 但每一项都会在长会话、非默认配置、或错误路径上静默出问题 ——
+> 内存只涨不落、配置写了不生效、失败没有任何痕迹。
+>
+> **无红线破坏性变更**，但有两处签名变化需要注意，见下方「升级注意」。
+
+### 修复 · 模块与依赖
+
+- **模块依赖只在排序时生效，运行时不校验**（C2）：`dependsOn` 此前**只参与拓扑排序**，不校验"依赖方是否真的初始化成功"。A 依赖 B、B 初始化失败时，A 照样初始化 —— 拿到的 `GetModule<B>()` 是 null，运行到第一次使用才炸，堆栈却指向 A 的业务代码，完全看不出根因在 B。
+  修复：逐条校验 `dependsOn` 是否都在"已成功初始化"集合里，不满足则**跳过该模块**并记入 `SkippedModules`。跳过沿依赖链自动传播（A→B→C，C 挂了 B 和 A 都跳过），无需额外逻辑。
+- **依赖校验位置在实例创建之后**（C2 连带）：若先 `AddComponent` 再判断"要不要初始化"，MonoBehaviour 的 `Awake` 已执行（可能访问了别的模块），副作用已经发生，此后再跳过只是没执行 `InitializeAsync` 而已。修复：校验前移到**创建实例之前**。
+- **`GetModule<T>` 对"因依赖被跳过"给裸 null**（C2 连带）：修复为返回 null 时说明是被跳过的模块并附上原因，`BuildDependencyFailureReason` 区分"依赖初始化失败（带异常类型与消息）""依赖自身也被跳过""依赖不在清单中或未启用"三种情况，并点名是哪个模块。
+- **`HasFailures` 不包含被跳过的模块**（C2 连带）：修复为同时覆盖 `FailedModules` 与 `SkippedModules`；结束汇总日志分别报告两者（失败的要查异常栈，被跳过的要查依赖链）。
+
+### 修复 · UI
+
+- **`OnHideAnimation` 全框架零调用**（B1）：`UIPanelBase` 暴露了关闭动画钩子，但没有任何地方调用它 —— 面板写了关闭动画永远不执行。修复：关闭/销毁两条路径都先播动画。
+- **`CloseInternal` 声称含动画实际同步返回**（B2）：修复为真正 `await OnHideAnimation`，事件顺序改为 隐藏 → 动画 → 广播。
+- **`DestroyPanel` 在 `UIManager.Init()` 前 NRE**：修复为 `_panelDic` 判空，新增 `PanelDicOrEmpty`。
+- **`Open<T>` 失败时调用方拿不到信号**（B4）：`Open<T>()` 是 `void` + `.Forget()`，找不到预制体时只打一条 Error —— 调用方完全不知道失败了，`Forget` 还不会抛。症状是"调了 Open，界面没出来，但没有任何报错指向我的代码"。
+  修复：新增 `TryOpen<T>()` 立即返回成败（同步路径在启动流程前**预检预制体**，因此能在同一帧给出结果），失败原因经新增的 `LastOpenError` 带出并点名是哪个面板。`Open<T>` 签名不动。
+
+### 修复 · 资源
+
+- **`LoadAll` 完全绕过缓存与引用计数**（A1）：旧实现直接 `return Resources.LoadAll<T>(path)` —— 资源不进缓存、不计引用。业务拿到一批图后，这批资源在框架眼里根本不存在：`IsCached` 恒 false、LRU 看不见、`ReleaseUnused` 管不到、容量策略也摸不着。想按容量回收回收不掉，只能靠 `Resources.UnloadUnusedAssets` 全量兜底（代价远大于定向回收）。
+  修复：逐个登记进缓存并各计一次隐式持有，由新增的 `ReleaseAllFrom(folder)` 分组归还。
+- **递归加载的路径推导不可靠**（A1 连带）：`Resources.LoadAll` 是**递归**的，而运行时拿不到资源的真实子路径（`AssetDatabase.GetAssetPath` 打包后不可用）。靠 `folder/资源名` 推导会让递归目录下的条目归还时漏掉。
+  修复：`LoadAll` 额外做**分组登记**（目录 → 本次登记过的 key 列表），`ReleaseAllFrom` 照单归还，与路径推导彻底解耦。
+- **`Release(path)` 无成对校验**（A4）：对未加载路径静默忽略、重复 Release 也不报错。业务漏 Release 或重复 Release 都无痕迹，只能靠 `GetCacheCount` 猜。修复：拆出 `ImplicitCount` 独立计数 —— 缓存命中计持有；重复 Release / 未缓存路径显式告警；重复 Release 不再吃掉显式引用。
+- **`ResourceHandle.Get<T>()` 在新计数语义下泄漏**（A4 连带）：修复为新增 `TryPeek<T>` / `ResourcesManager.Peek<T>`，`Get` 改为只读缓存不计数。
+- **`LoadAsync` 并发等待失败无告警**（A3）：只有"首个加载者"那条路径会告警，等待者静默拿到 null。修复：等待者路径补告警与隐式持有登记。
+
+### 修复 · 对象池
+
+- **超容量销毁跳过 `OnDespawn`**（F1）：`Despawn` 在 `capacity` 超限时直接 `Destroy(go)`，跳过了 `IPoolable.OnDespawn` —— 对象拿到 `OnSpawn` 却永远等不到配对的 `OnDespawn`，靠它退订事件/归还外部引用的组件会静默泄漏，且只在"池达到容量上限"这种非默认状态下才发生。修复：先 `InvokeOnDespawn()` 再 `Destroy`（顺序不能反，否则回调里访问自己的 GameObject 已是假 null），`Clear` 对**使用中**对象的销毁同样补调。
+- **反向陷阱：空闲对象被重复调 `OnDespawn`**（F1 连带）：若为了"对称"给 `Clear`/`Trim` 里的空闲对象也补调，就变成"一次 `OnSpawn` 配两次 `OnDespawn`"。修复：只给**使用中**对象补调。
+- **`DespawnImmediate` 找不到池时静默销毁**（F2）：旧实现 `Destroy(go)` 后返回 `void`，调用方还以为是回收成功、下次 `Spawn` 会复用。修复：返回 `bool`（是否成功回收到池），并在销毁前告警说明"已直接销毁、不会被复用"。
+- **`PoolItem` 每次 `GetComponents<IPoolable>()`**（F4）：该方法**每次新分配数组**，即使一个 `IPoolable` 都没有。Spawn/Despawn 是子弹、飘字、特效的热路径，每秒数百次即构成持续 GC 压力（表现为周期性卡顿，不报错，只能靠 Profiler 看出来）。修复：首次收集后缓存数组，回调改索引循环并跳过假 null；新增 `InvalidatePoolableCache()` 供运行期增删组件后手动失效。
+
+### 修复 · 日志
+
+- **`MaxFileSizeBytes` 从未生效**（D4）：`LogSettingsAsset.MaxFileSizeMB` → `LogManager.MaxFileSizeBytes`，但 `FileLogWriter` 从来不做按大小切分 —— 一个在设置面板里可调、写进 SO 资产、看起来完全生效的开关，实际零作用。后果是日志文件无限增长，移动端会把存储写满。修复：`FileLogWriter` 补按大小轮转（`.1`~`.N` 备份，份数受 `SaveDays` 约束）。
+- **`LogManager.InitializeWriters` 不可重入**（D4 连带）：二次调用会不断往 `_writers` 里追加，导致同一条日志写多遍、旧文件句柄泄漏。修复：重建前先 Flush+Close 旧 writer；新增公开 `ReinitializeWriters()`，运行时改配置即可生效。
+- **`FileLogWriter.Close` 在锁内调 `Write` 语义混乱**：修复为收尾标记走 `WriteLineDirect`，不经过缓冲逻辑。
+- **`LogUploader` 待发队列无上限**（D3）：`_pendingLogs` 是无限 Queue。生产端（每条超阈值日志）远快于消费端（服务器不可达时原地退避重试），队列只涨不落 —— 服务器挂了 + 业务疯狂报错的场景下，日志系统自己会成为压死进程的最后一根稻草。修复：抽出 `LogUploadQueue` —— 超限丢**最旧的**（保留最近现场）、丢弃计数可观测。
+- **上传失败批次被重排到队尾**（D3 连带）：失败批次是最旧的现场，放队尾会被新日志反复挤到后面，极端情况下永远发不出去。修复为 `RequeueAtHead`，回到队首且保持批次内部顺序。
+- **`LogManager` 的 writer 缺"按需建立"路径**（D1）：writer 只在 `Awake` 里建立。若 `LogManager` 被走到了但 `Awake` 没执行（EditMode 里 `AddComponent` 不触发 `Awake`；或模块清单漏配后有人手工 `new`），`_writers` 就是空的 —— 所有日志**静默消失**。修复：`WriteToWriters` 发现 writer 为空时**按需建立**一次，`_writersEnsured` 约束只尝试一次。
+
+### 修复 · 本地化
+
+- **网络 Sprite 缓存只进不出**（H3）：`_netSpriteCache` 是静态字典，每下载一张图就多一条，进程不退出永不释放。Sprite / Texture2D 是运行时创建的 Unity 对象，**GC 收不走，必须显式 Destroy** 才还显存。长会话（多语言切图、活动页反复打开）下内存只涨不落且无报错。
+  修复：新增 `NetSpriteCache` —— 条目带**持有数**与 LRU 时钟；超过 `MaxCount`（默认 32）时只淘汰**持有数为 0** 的最久未用项，淘汰时真正 `Destroy` Sprite 与 Texture2D。持有数 > 0 的条目永不被淘汰（宁可短暂超限，也不能把正在显示的图销毁掉）。
+- **异步结果过期仍贴图**（H3 连带）：`LoadNet` 在 `await` 之后不校验自身状态，语言切换导致 url 已变、或组件已销毁时，旧结果仍会写进 `Image.sprite`，并让该 url 的持有数永久 +1。修复：加 `m_RequestGeneration` 请求代号，不符则丢弃结果并归还持有。
+- **`Register` 与 `Acquire` 分离导致自淘汰竞态**（H3 连带）：`Register` 以持有数 0 入库并立刻 `Trim`，此时新条目恰好是唯一的「无人持有」项，会被自己触发的淘汰清掉。修复：新增原子的 `RegisterAndHold`。
+
+### 新增 API
+
+- `ModuleManager.SkippedModules`：因依赖不可用被跳过的模块及原因（C2）。
+- `ModuleManager.HasFailures` 语义扩展：现在也包含被跳过的模块。
+- `UIManager.TryOpen<T>()` / `UIManager.LastOpenError`：同步路径的显式成败版（B4）。
+- `ResourcesManager.ReleaseAllFrom(folder)` / `ResourcesLoader.MakeAssetCachePath(...)`：分组归还 `LoadAll` 的持有（A1）。
+- `NetSpriteCache`（公开类型）：`MaxCount` / `Count` / `TryPeek` / `TryAcquire` / `Acquire` / `Release` / `Register` / `RegisterAndHold` / `GetHolds` / `Clear` / `Trim`。业务可在切场景或内存告警时调 `Clear()` 主动压显存。
+- `PoolItem.InvalidatePoolableCache()`：运行期增删 `IPoolable` 组件后使组件缓存失效。
+- `LogUploadQueue`（公开类型）：待发队列上限策略的独立实现。
+- `LogUploader.MaxPendingLogs` / `LogUploader.GetDroppedCount()`：队列上限可配、丢弃量可观测。
+- `LogManager.ReinitializeWriters()`：运行时改日志配置后重建 writer，不必重启。
+
+### 升级注意（两处签名变化）
+
+1. **`ObjectPoolsManager.DespawnImmediate` 与 `GameObject.DespawnImmediate` 现在返回 `bool`**（F2）。
+   直接调用无需改动；若写成 `Action<GameObject>` 委托或方法组转换，需要改成 lambda。
+2. **`IResourceLoader` 新增 `ReleaseAllFrom(string)` 成员**（A1）。
+   自定义后端（非内置 `ResourcesLoader` / `AddressablesLoader`）需要实现它，返回 0 即可。
+
+### 行为变更提示
+
+- **模块依赖现在是硬约束**：`dependsOn` 写了但依赖方初始化失败时，本模块会被**跳过**（旧版是照常初始化）。
+  若升级后看到某些模块被跳过，说明依赖链上确实有坏模块 —— 请检查 `SkippedModules`。
+- **`LoadAll` 现在产生持有**：必须通过 `ReleaseAllFrom` 或逐个 `Release` 归还（旧版不产生任何持有）。
+  迁移最省事的写法：`ResourcesManager.Instance.ReleaseAllFrom(原 LoadAll 用的目录)`。
+
+### 台账纠错
+
+- **E1「`Subscribe` 令牌在重复订阅时只退订一次」—— 误记，非缺陷。**
+  `Delegate.Remove` 的语义正是「移除**最后一个**匹配项」，两个令牌依次 `Dispose` 会摘两次、正好摘干净。
+  已补 `DelegateRemoveSemanticsTests`（3 条）固化结论。
+
+### 测试基线
+
+EditMode **94** + PlayMode **87** = **181** 条用例全绿，日志扫描无运行期错误。
+
+本轮新增：`ModuleDependencyTests` ×9、`NetSpriteCacheTests` ×12、`LogUploadQueueTests` ×11、
+`PoolItemPoolableCacheTests` ×6、`PoolLifecycleSymmetryTests` ×6、`LoadAllCacheTests` ×9、
+`FileLogWriterRotationTests` ×6、`UIPanelHideAnimationTests` ×4、`ResourceHandleTests` ×3、
+`LogWriterOnDemandTests` ×5、`UIOpenFailureTests` ×2、`DelegateRemoveSemanticsTests` ×3。
 ## [0.9.2] - 2026-11-11
 
 > 补齐 Phase 7 遗留的两个观察项：事件派发的异常隔离、日志模块的会话重置。

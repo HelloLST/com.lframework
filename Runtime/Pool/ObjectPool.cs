@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace LFramework
@@ -98,8 +98,19 @@ namespace LFramework
             //检查容量，超出容量则销毁而非回收
             if (capacity >= 0 && _unusedObjects.Count >= capacity)
             {
-                //销毁超出的对象
+                // 打磨台账 F1：销毁前**必须**先调 OnDespawn。
+                //
+                // 原实现这里直接 Destroy(go)，跳过了 IPoolable.OnDespawn ——
+                // 于是对象生命周期出现不对称：拿到了 OnSpawn，却永远等不到配对的 OnDespawn。
+                // 依赖该钩子做清理的组件（退订事件、归还外部引用、注销计时器、停粒子…）
+                // 会**静默泄漏**，而且只在"池达到容量上限"这种非默认状态下才发生，
+                // 平时测不出来，量大了才开始慢慢出问题。
+                //
+                // 注意顺序：先 OnDespawn 再 Destroy —— 反过来的话回调里访问自己的
+                // GameObject 就已经是假 null 了，清理逻辑必然 NRE。
+                item.InvokeOnDespawn();
                 Destroy(go);
+                LastUsedTime = Time.realtimeSinceStartup;
                 return;
             }
 
@@ -132,6 +143,10 @@ namespace LFramework
                 var item = _unusedObjects.Dequeue();
                 if (item.GameObject != null)
                 {
+                    // 打磨台账 F1 的语义边界：这里**不**补调 OnDespawn。
+                    // 空闲队列里的对象要么已经收过 OnDespawn（Despawn 回收进来的），
+                    // 要么从未 Spawn（Preload 直接塞进来的）—— 两种情况都不该再有 OnDespawn，
+                    // 否则就变成"一次 OnSpawn 配两次 OnDespawn"，同样是契约破坏。
                     Destroy(item.GameObject);
                 }
             }
@@ -201,17 +216,24 @@ namespace LFramework
         /// </summary>
         public void Clear()
         {
+            // 打磨台账 F1 的语义：OnSpawn 与 OnDespawn 必须**一一配对**。
+            //   - 正在使用的对象：收过 OnSpawn、还没收 OnDespawn → 销毁前补调 OnDespawn；
+            //   - 空闲对象：已经在 Despawn 时收过 OnDespawn（或 Preload 从未 Spawn）→ 不能再调。
+
             //销毁所有正在使用的对象
             foreach (var item in _usedObjects.Values)
             {
                 if (item.GameObject != null)
                 {
+                    // 它们从没被回收过，缺的那次 OnDespawn 就是最典型的钩子不对称：
+                    // 组件靠它退订事件 / 归还外部引用，漏掉就是静默泄漏。
+                    item.InvokeOnDespawn();
                     Destroy(item.GameObject);
                 }
             }
             _usedObjects.Clear();
 
-            //销毁所有未使用的对象
+            //销毁所有未使用的对象（不补 OnDespawn，原因见上）
             while (_unusedObjects.Count > 0)
             {
                 var item = _unusedObjects.Dequeue();
