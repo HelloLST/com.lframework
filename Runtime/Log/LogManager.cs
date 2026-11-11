@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -247,7 +247,15 @@ namespace LFramework
             // 未就绪时进入启动缓冲，InitializeAsync 时统一回放 —— Phase 5 / 5.4
             if (!UnitySingleton<LogManager>.TryGetExisting(out var instance))
             {
-                if (_startupBuffer.Count >= StartupBufferCapacity) _startupBuffer.Dequeue();
+                // 缓冲满时溢出到 Unity 控制台，而不是只丢最旧一条了事：
+                // 若本会话里 LogManager 永远不会被创建（典型：EditMode 测试中 AddComponent 不触发
+                // Awake，或模块清单里漏配 LogManager），缓冲永远不会回放，日志会静默消失，
+                // 排查时看起来"什么都没发生"。宁可吵一点，也不能丢。
+                if (_startupBuffer.Count >= StartupBufferCapacity)
+                {
+                    WriteFallbackToUnityConsole(entry);
+                    return;
+                }
                 _startupBuffer.Enqueue(entry);
                 return;
             }
@@ -262,6 +270,29 @@ namespace LFramework
         private static void WriteToWriters(LogManager instance, LogEntry entry)
         {
             foreach (var writer in instance._writers) { try { writer.Write(entry); } catch { } }
+        }
+
+        /// <summary>
+        /// 启动缓冲溢出时的兜底输出：直接用 Unity 控制台写出，不走 writer。
+        /// 只在"缓冲已满且 LogManager 仍未就绪"时触发，用于避免日志在无管理器的会话里静默消失。
+        /// </summary>
+        private static void WriteFallbackToUnityConsole(LogEntry entry)
+        {
+            string message = $"[{entry.Time:HH:mm:ss.fff}][{entry.Level}]{entry.Message}";
+            switch (entry.Level)
+            {
+                case LogLevel.Warning:
+                    // 必须全限定：本类内的 Debug(string,string) 方法会遮蔽 using 别名 Debug = UnityEngine.Debug
+                    UnityEngine.Debug.LogWarning(message);
+                    break;
+                case LogLevel.Error:
+                case LogLevel.Fatal:
+                    UnityEngine.Debug.LogError(message);
+                    break;
+                default:
+                    UnityEngine.Debug.Log(message);
+                    break;
+            }
         }
 
         /// <summary>回放启动缓冲（LogManager 模块初始化时调用一次）。</summary>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -10,6 +10,20 @@ namespace LFramework
     public class ResourcesManager : SingletonBase<ResourcesManager>, IModule
     {
         private IResourceLoader _loader;
+
+        /// <summary>
+        /// 加载器访问点：惰性创建，任何取用路径都拿得到可用实例。
+        /// Phase 9：原实现只在 <see cref="Init"/> 里赋值，一旦有代码绕过 <c>Instance</c>
+        /// 拿到未初始化的对象（例如反射构造的模块实例），这里就会是 null 并一路炸到 ReleaseAll。
+        /// </summary>
+        private IResourceLoader Loader
+        {
+            get
+            {
+                if (_loader == null) _loader = new ResourcesLoader();
+                return _loader;
+            }
+        }
 
         protected override void Init()
         {
@@ -25,28 +39,28 @@ namespace LFramework
             _loader = loader ?? throw new ArgumentNullException(nameof(loader));
         }
 
-        public IResourceLoader GetLoader() => _loader;
+        public IResourceLoader GetLoader() => Loader;
 
         #region 加载
 
         public T Load<T>(string path) where T : UnityEngine.Object
         {
-            return _loader.Load<T>(path);
+            return Loader.Load<T>(path);
         }
 
         public T[] LoadAll<T>(string path) where T : UnityEngine.Object
         {
-            return _loader.LoadAll<T>(path);
+            return Loader.LoadAll<T>(path);
         }
 
         public void LoadAsync<T>(string path, Action<T> callback) where T : UnityEngine.Object
         {
-            _loader.LoadAsync<T>(path, callback);
+            Loader.LoadAsync<T>(path, callback);
         }
 
         public UniTask<T> LoadAsync<T>(string path) where T : UnityEngine.Object
         {
-            return _loader.LoadAsync<T>(path);
+            return Loader.LoadAsync<T>(path);
         }
 
         #endregion
@@ -55,7 +69,7 @@ namespace LFramework
 
         public void Release(string path)
         {
-            _loader.Release(path);
+            Loader.Release(path);
         }
 
         /// <summary>
@@ -66,7 +80,7 @@ namespace LFramework
         [Obsolete("请改用 ResourcesManager.Pin<T>() 返回的 IResourceHandle；手工 AddRef/ReleaseRef 配对易漏。旧 API 将在 1.x 后移除。")]
         public void AddRef(string path)
         {
-            _loader.AddRef(path);
+            Loader.AddRef(path);
         }
 
         /// <summary>
@@ -76,7 +90,7 @@ namespace LFramework
         [Obsolete("请改用 ResourcesManager.Pin<T>() 返回的 IResourceHandle；手工 AddRef/ReleaseRef 配对易漏。旧 API 将在 1.x 后移除。")]
         public void ReleaseRef(string path)
         {
-            _loader.ReleaseRef(path);
+            Loader.ReleaseRef(path);
         }
 
         /// <summary>
@@ -86,7 +100,7 @@ namespace LFramework
         /// </summary>
         internal void ReleaseExplicitRef(string path)
         {
-            _loader.ReleaseRef(path);
+            Loader.ReleaseRef(path);
         }
 
         /// <summary>
@@ -97,29 +111,29 @@ namespace LFramework
         public IResourceHandle Pin<T>(string path) where T : UnityEngine.Object
         {
             if (string.IsNullOrEmpty(path)) throw new ArgumentException("path 为空", nameof(path));
-            _loader.Load<T>(path);   // 确保已缓存（隐式持有 +1；已加载则为缓存命中）
-            _loader.AddRef(path);    // 句柄显式钉住 +1
+            Loader.Load<T>(path);   // 确保已缓存（隐式持有 +1；已加载则为缓存命中）
+            Loader.AddRef(path);    // 句柄显式钉住 +1
             return new ResourceHandle(this, path);
         }
 
         public void ReleaseUnused()
         {
-            _loader.ReleaseUnused();
+            Loader.ReleaseUnused();
         }
 
         public void ReleaseAll()
         {
-            _loader.ReleaseAll();
+            Loader.ReleaseAll();
         }
 
         public void UnloadUnusedAssets(Action callback = null)
         {
-            _loader.UnloadUnusedAssets(callback);
+            Loader.UnloadUnusedAssets(callback);
         }
 
         public void ForceUnload(Action callback = null)
         {
-            _loader.UnloadUnusedAssets(() =>
+            Loader.UnloadUnusedAssets(() =>
             {
                 GC.Collect();
                 callback?.Invoke();
@@ -132,27 +146,27 @@ namespace LFramework
 
         public void SetMaxCacheCount(int count)
         {
-            _loader.SetMaxCacheCount(count);
+            Loader.SetMaxCacheCount(count);
         }
 
         public void SetAutoCleanupInterval(float intervalSeconds)
         {
-            _loader.SetAutoCleanupInterval(intervalSeconds);
+            Loader.SetAutoCleanupInterval(intervalSeconds);
         }
 
         public string GetCacheInfo()
         {
-            return _loader.GetCacheInfo();
+            return Loader.GetCacheInfo();
         }
 
         public int GetCacheCount()
         {
-            return _loader.GetCacheCount();
+            return Loader.GetCacheCount();
         }
 
         public bool IsCached(string path)
         {
-            return _loader.IsCached(path);
+            return Loader.IsCached(path);
         }
 
         #endregion

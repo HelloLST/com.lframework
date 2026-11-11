@@ -180,6 +180,124 @@ namespace LFramework
         }
 
         // ================================================================
+        // 内部: 单例探针发现（Phase 9：修复"幽灵实例"）
+        // ================================================================
+
+        /// <summary>
+        /// 缓存 typeName -> "获取单例实例"的委托。每帧/每模块只反射一次。
+        /// </summary>
+        private static readonly Dictionary<string, Func<object>> _instanceAccessors =
+            new Dictionary<string, Func<object>>();
+
+        /// <summary>缓存 typeName -> <c>UnitySingleton&lt;T&gt;.TryGetExisting</c>，值可能为 null。</summary>
+        private static readonly Dictionary<string, MethodInfo> _existingProbes =
+            new Dictionary<string, MethodInfo>();
+
+        /// <summary>
+        /// 查找继承链上的 <c>static bool TryGetExisting(out T)</c>（<see cref="UnitySingleton{T}"/> 提供）。
+        /// 用途：MonoBehaviour 模块在 AddComponent 之前先探一次"是不是已经有活着的单例"。
+        /// 否则一旦 <c>UIManager.Instance</c> 之类在模块初始化之前被访问过，
+        /// AddComponent 会造出第二个实例，它立刻在 <c>Awake</c> 里把自己 Destroy 掉，
+        /// 而 <c>_instancesByTypeName</c> 记下的正是这个将死的对象 —— 与幽灵实例同一类病。
+        /// </summary>
+        private static MethodInfo FindExistingProbe(Type type)
+        {
+            string key = type.FullName ?? type.Name;
+            if (_existingProbes.TryGetValue(key, out var cached)) return cached;
+
+            MethodInfo probe = null;
+            for (Type current = type; current != null && probe == null; current = current.BaseType)
+            {
+                foreach (var method in current.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                {
+                    if (method.Name != "TryGetExisting") continue;
+                    if (method.ReturnType != typeof(bool)) continue;
+                    var parameters = method.GetParameters();
+                    if (parameters.Length != 1 || !parameters[0].ParameterType.IsByRef) continue;
+                    // out 参数的值类型必须能装下模块类型，避免误用无关的单例探针
+                    if (!parameters[0].ParameterType.GetElementType().IsAssignableFrom(type)) continue;
+                    probe = method;
+                    break;
+                }
+            }
+
+            _existingProbes[key] = probe;   // 缓存 null 同样有意义：避免每次重扫继承链
+            return probe;
+        }
+
+        /// <summary>探测"已存在的单例实例"，没有则返回 null（绝不创建）。</summary>
+        private static object ProbeExistingSingleton(Type type)
+        {
+            var probe = FindExistingProbe(type);
+            if (probe == null) return null;
+
+            try
+            {
+                var args = new object[] { null };
+                if (!(bool)probe.Invoke(null, args)) return null;
+                object existing = args[0];
+                if (existing == null) return null;
+                // Unity 假 null（已被销毁的组件）视为不存在
+                if (existing is UnityEngine.Object unityObject && unityObject == null) return null;
+                return existing;
+            }
+            catch (Exception e)
+            {
+                LogManager.Warning($"[ModuleManager] 探测 {type.FullName} 的既有单例失败，按新建处理：{e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 在整条继承链上查找 public static 的 Instance 属性。
+        ///
+        /// 教训（Phase 9，测试抓到）：<c>type.GetProperty("Instance", Public|Static)</c> **不会**
+        /// 返回声明在泛型基类上的静态属性 —— <c>ResourcesManager : SingletonBase&lt;ResourcesManager&gt;</c>
+        /// 的 Instance 实际声明在 <c>SingletonBase&lt;T&gt;</c> 上，于是这里恒为 null，
+        /// CreateInstance 一路掉进 Activator 回退分支，造出一个 Init() 从未执行的"幽灵实例"：
+        /// 它与 <c>ResourcesManager.Instance</c> 不是同一个对象，<c>_loader</c> 为 null，
+        /// 平时看不出来（业务都走 Instance），直到 Dispose 才炸 NullReferenceException。
+        /// 因此必须逐级 BaseType 查找，且只认返回类型可赋值给模块类型的属性，
+        /// 避免误把无关类型的 Instance 当成模块实例。
+        /// </summary>
+        private static PropertyInfo FindSingletonInstanceProperty(Type type)
+        {
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                var prop = current.GetProperty(
+                    "Instance",
+                    BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
+                if (prop == null) continue;
+                if (!type.IsAssignableFrom(prop.PropertyType)) continue;
+                return prop;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 生成"获取该类型单例实例"的委托；没有可用的静态 Instance 时返回 null。
+        /// </summary>
+        private static Func<object> GetOrCreateInstanceAccessor(Type type)
+        {
+            string key = type.FullName ?? type.Name;
+            if (_instanceAccessors.TryGetValue(key, out var cached)) return cached;
+
+            Func<object> accessor = null;
+            var prop = FindSingletonInstanceProperty(type);
+            if (prop != null && prop.CanRead)
+            {
+                var getter = prop.GetGetMethod();
+                if (getter != null)
+                {
+                    accessor = (Func<object>)Delegate.CreateDelegate(typeof(Func<object>), getter);
+                }
+            }
+
+            _instanceAccessors[key] = accessor;   // 缓存 null 结果同样有意义：避免每次重扫继承链
+            return accessor;
+        }
+
+        // ================================================================
         // 内部: 类型解析
         // ================================================================
 
@@ -210,30 +328,58 @@ namespace LFramework
 
         /// <summary>
         /// 根据类型创建模块实例:
-        /// - MonoBehaviour -> AddComponent 到本 GameObject
-        /// - 纯 C# (有静态 Instance 属性, 如 SingletonBase 模式) -> 访问 Instance 触发懒创建
+        /// - MonoBehaviour -> 先探既有单例，没有再 AddComponent 到本 GameObject
+        /// - 纯 C# (继承链上有静态 Instance, 如 SingletonBase 模式) -> 访问 Instance 触发懒创建 + Init
+        /// - 其余 -> 反射无参构造（会跳过 Init，见下方告警）
         /// </summary>
         private object CreateInstance(Type type)
         {
-            // MonoBehaviour: AddComponent
+            // MonoBehaviour: 先看是不是已经有活着的单例，避免造出"即将自我销毁的重复实例"
             if (typeof(MonoBehaviour).IsAssignableFrom(type))
             {
+                // 如果 Instance 已被提前访问过，这里直接沿用，不再 AddComponent
+                var existing = ProbeExistingSingleton(type);
+                if (existing != null)
+                {
+                    LogManager.Info($"[ModuleManager] {type.FullName} 已有存活单例，直接沿用（不重复创建）。");
+                    return existing;
+                }
+
                 var mb = gameObject.AddComponent(type);
+
+                // AddComponent 期间 Awake 已执行；若我们刚创建的这个并不是最终单例，
+                // 说明存在并发/提前访问，改用它注册的那个实例，别把将死的对象记进清单。
+                var settled = ProbeExistingSingleton(type);
+                if (settled != null && !ReferenceEquals(settled, mb)) return settled;
+
                 return mb;
             }
 
-            // 纯 C#: 尝试访问静态 Instance 属性 (SingletonBase 模式)
-            var instanceProp = type.GetProperty("Instance",
-                BindingFlags.Public | BindingFlags.Static);
-            if (instanceProp != null)
+            // 纯 C#: 走静态 Instance（SingletonBase / UnitySingleton 之外的懒加载单例模式）
+            var accessor = GetOrCreateInstanceAccessor(type);
+            if (accessor != null)
             {
-                return instanceProp.GetValue(null);
+                try
+                {
+                    object singleton = accessor();
+                    if (singleton != null) return singleton;
+                    LogManager.Error($"[ModuleManager] {type.FullName}.Instance 返回 null，改用反射创建（Init 不会执行）。");
+                }
+                catch (Exception e)
+                {
+                    LogManager.Error($"[ModuleManager] 访问 {type.FullName}.Instance 失败，改用反射创建（Init 不会执行）:\n{e}");
+                }
             }
 
-            // 回退: 反射创建
+            // 回退: 反射创建。注意这条路径**不会**执行 SingletonBase.Init()，
+            // 模块必须自己在 InitializeAsync 里完成初始化，否则会带着未初始化的字段运行。
             try
             {
-                return Activator.CreateInstance(type, true);
+                var created = Activator.CreateInstance(type, true);
+                LogManager.Warning(
+                    $"[ModuleManager] {type.FullName} 没有可用的静态 Instance，走反射创建：" +
+                    "Init() 不会被执行，请把初始化逻辑放进 InitializeAsync()。");
+                return created;
             }
             catch (Exception e)
             {
