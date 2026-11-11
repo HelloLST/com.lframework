@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-11
+
+> 补齐 Phase 7 遗留的两个观察项：事件派发的异常隔离、日志模块的会话重置。
+> 两者都是"不会立刻炸、但会在特定场景静默失效"的类型。
+
+### Fixed
+
+- **EventCenter 监听器异常不隔离**：多播委托直接 Invoke()，任一监听器抛异常会**中断后续全部监听器**，且异常冒泡给触发方 —— 一个 UI 监听器写错就能让整条业务事件链断掉。这与 MonoManager 已有的隔离策略不一致。改为取 GetInvocationList() 逐个调用，单个监听器异常就地拦截并打 Error 日志（带事件名便于定位）。代价是每次派发多一次 GetInvocationList 分配，事件派发非每帧热路径，可接受。
+- **LogManager 静态状态无会话重置**（关域重载场景）：
+  - _startupBuffer 残留 —— 上一会话没回放的日志会混进新会话首屏，并占容量把本会话的启动日志挤掉；
+  - OnLogReceived 残留 —— 上一会话已销毁对象的订阅仍在委托上，本会话首次派发即撞 Unity 假 null；
+  - LogUploader._pendingLogs 残留 —— 上一会话未发出的日志会在本会话再传一遍；
+  - LogUploader._isUploading 残留为 	rue —— 本会话 StartUpload 直接 return，**上传功能永久失效且无任何提示**；_retryDelay / _consecutiveFailures 亦会带进新会话。
+  
+  修复：LogManager 补 [RuntimeInitializeOnLoadMethod(SubsystemRegistration)] 复位上述状态，并新增 LogUploader.ResetForNewSession()。_sanitizePatterns / _sanitizeCombinedRegex **刻意不清理** —— 纯函数性缓存（正则对象，不持有 Unity 对象），重建反而浪费。LogManager 是非泛型类型，引擎回调正常触发，无需走 RuntimeSessionReset。
+
+### Added
+- 回归测试：EventCenterIsolationTests ×5（抛异常的监听器不阻断后续、带参重载同样隔离、多个异常各自隔离、无监听器安全、日志带事件名）。
+
 ## [0.9.1] - 2026-11-11
 
 > **试吃期第一轮修复，建议所有使用 0.9.0 的工程升级。**

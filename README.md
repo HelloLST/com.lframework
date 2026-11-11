@@ -30,7 +30,7 @@
 
 ```jsonc
 // Packages/manifest.json
-"com.lframework.core": "https://github.com/HelloLST/com.lframework.git#v0.9.1"
+"com.lframework.core": "https://github.com/HelloLST/com.lframework.git#v0.9.2"
 ```
 
 > 本地开发调试可用 file 路径引用：`"com.lframework.core": "file:../../com.lframework"`

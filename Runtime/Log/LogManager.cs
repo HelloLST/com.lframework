@@ -122,6 +122,32 @@ namespace LFramework
         private const int StartupBufferCapacity = 256;
 
         public static event Action<LogEntry> OnLogReceived;
+
+        /// <summary>
+        /// 进入 Play 时清理跨会话静态状态（Phase 9）。
+        ///
+        /// 关闭 Domain Reload 时以下静态字段会从上一会话残留，导致新会话的错误现象：
+        /// - <c>_startupBuffer</c>：上一会话没来得及回放的日志会混进新会话首屏，
+        ///   且占着容量把真正属于本会话的启动日志挤掉；
+        /// - <c>OnLogReceived</c>：上一会话被销毁对象的订阅仍挂在委托上，
+        ///   本会话首次派发就会撞上已销毁的 MonoBehaviour（Unity 假 null）；
+        /// - <c>LogUploader</c> 的待发队列 / 重试状态：会把上一会话的日志再传一遍，
+        ///   且 <c>_isUploading</c> 若停在 true，本会话的上传永远起不来。
+        ///
+        /// <c>_sanitizePatterns</c> / <c>_sanitizeCombinedRegex</c> 不清理 ——
+        /// 它们是纯函数性缓存（正则对象，不持有 Unity 对象），重建反而浪费。
+        /// <see cref="LogManager"/> 继承 MonoBehaviour（UnitySingleton），不是开放泛型类型，
+        /// 所以这里的引擎回调会正常触发，无需走 RuntimeSessionReset。
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticStateForNewSession()
+        {
+            _startupBuffer.Clear();
+            OnLogReceived = null;
+
+            // 上传通道：停在上一个会话的队列与重试状态都要复位
+            LogUploader.ResetForNewSession();
+        }
         #endregion
 
         protected override void Awake()
@@ -425,6 +451,25 @@ namespace LFramework
         private static bool _isUploading = false;
         private static float _retryDelay = BASE_RETRY_DELAY;
         private static int _consecutiveFailures = 0;
+
+        /// <summary>
+        /// 进入 Play 时复位上传通道（Phase 9）。由 <see cref="LogManager.ResetStaticStateForNewSession"/> 调用。
+        ///
+        /// 关闭 Domain Reload 时这些静态字段会跨会话残留：
+        /// - <c>_pendingLogs</c>：上一会话未发出的日志会在本会话再传一遍（重复 + 误导排查）；
+        /// - <c>_isUploading</c>：上一会话若停在 true（例如 upload loop 被域重载打断），
+        ///   本会话的 <c>StartUpload</c> 会直接 return，**上传功能永久失效且无任何提示**；
+        /// - <c>_retryDelay</c> / <c>_consecutiveFailures</c>：退避状态带进新会话。
+        /// </summary>
+        internal static void ResetForNewSession()
+        {
+            lock (_lockObj) { _pendingLogs.Clear(); }
+            // _isUploading 停在 true 说明上一会话的 UploadLoop 已被域重载杀死，
+            // 本会话必须允许重新启动；真正的并发启动由 _isUploading 自身守卫。
+            _isUploading = false;
+            _retryDelay = BASE_RETRY_DELAY;
+            _consecutiveFailures = 0;
+        }
 
         public static void UploadLog(string message, string stackTrace, LogLevel level)
         {
