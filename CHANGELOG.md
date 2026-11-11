@@ -7,15 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **ModuleManager 创建模块时产出"幽灵实例"**（P0，回归测试 `ModuleManagerTests` 抓到）：`CreateInstance` 用 `type.GetProperty("Instance", Public|Static)` 找懒加载单例入口，而 .NET **不会**沿继承链返回声明在泛型基类上的静态属性。`ResourcesManager` / `LocalizationManager`（均继承 `SingletonBase<T>`）因此全部落进 `Activator.CreateInstance` 回退分支，造出 **`Init()` 从未执行**的实例：它与 `Xxx.Instance` 不是同一个对象、`_loader` 为 null。业务侧全走 `Instance` 所以运行时表现正常，直到销毁时才炸 —— PlayMode 测试日志里长期存在一条被吞掉的 `ModuleManager.OnDestroy → ResourcesManager.Dispose → ReleaseAll → NullReferenceException`。修复：改为逐级 `BaseType` 查找静态 `Instance`（并校验返回类型可赋值给模块类型），通过 `Delegate.CreateDelegate` 缓存获取器；反射回退路径补 Warning，明确提示"Init() 不会被执行，请把初始化放进 InitializeAsync()"。
-- **MonoBehaviour 模块记录到"即将自我销毁的重复实例"**（同上一起修）：若 `UIManager.Instance` 之类在模块初始化之前已被访问，`AddComponent` 会造出第二个实例，它在 `Awake` 里立刻 `Destroy` 自己，而 `_instancesByTypeName` 记下的正是这个将死的对象。修复：AddComponent 前后各探一次继承链上的 `TryGetExisting`，已有存活单例则直接沿用。
-- **`ResourcesManager._loader` 可能为 null**：新增惰性 `Loader` 访问点，任何取用路径都拿得到可用加载器；`Init()` 仍照常赋值。即使将来再有代码绕过 `Instance` 拿到对象，`ReleaseAll` / `Load` 也不会再抛 NRE。
-- **`LogManager` 启动缓冲满时静默丢日志**：缓冲达上限（256）后原实现是"丢弃最旧一条"，但若本会话里 `LogManager` 永远不会被创建（典型：EditMode 测试中 `AddComponent` 不触发 `Awake`；或模块清单里漏配 `LogManager`），缓冲永不回放，日志会**整段消失**，排查时看起来"什么都没发生"。现在缓冲满时溢出到 Unity 控制台（`WriteFallbackToUnityConsole`），宁可吵也不丢。（注：写该类时注意本类内的 `Debug(string,string)` 方法会遮蔽 `using Debug = UnityEngine.Debug` 别名，需全限定 `UnityEngine.Debug`。）
+## [0.9.1] - 2026-11-11
 
-- **开放泛型类型上的会话重置从未生效**（Phase 7 完整性测试发现）：引擎不会为闭合泛型类型调用声明在开放泛型类型中的 `[RuntimeInitializeOnLoadMethod]`（已实测 Unity 2022.3.62f3c1），导致关域重载（DR-off）下 `SingletonBase<T>` 静态实例、`ScriptableConfigCache<T>` 配置缓存、`UnitySingleton<T>` 的 `_instance`/`IsExisted`/`_isQuitting` 全部跨 Play 会话残留——0.9.0 里"进入 Play 自动重置"的声明对这三类不成立。新增非泛型 `RuntimeSessionReset`（Runtime/Singleton）作为引擎回调入口：三个泛型类在静态构造函数里注册重置委托（注册时立即执行一次），每次进 Play 遍历重置；泛型类型上的旧特性仅保留作静态审计标记。demo 仓库新增真实双会话完整性测试（EnterPlayMode/ExitPlayMode 两次、关 Domain Reload）证明修复。
-- **ArchitectureGuardrail 构建拦截开关不持久**（Phase 7.4）：`FailBuildOnHardViolation` 由内存静态字段改为按工程的 `EditorPrefs`（key 含工程路径），菜单勾选跨编译/重启保留；默认仍为关闭，不改变现有出包行为。
-- **ArchitectureGuardrail 扫描报告落盘**（Phase 7.4）：全量扫描与构建拦截共用 `ScanProject()`，结果写工程根 `Artifacts/ArchitectureGuardrail/report.json`（时间戳、开关、文件数、错误/提醒/读取失败计数与逐条违规），供 CI 消费；读取失败的文件计入 `ReadFailures`，开启拦截时同样中止构建；空工程（无 `Assets/Scripts`）产出零文件报告而非抛异常；测试程序集目录（`/Tests/`、`/TestsPlayMode/`）纳入排除清单。
+> **试吃期第一轮修复，建议所有使用 0.9.0 的工程升级。**
+>
+> 0.9.0 发布后经"回读源码 + 给测试脚本补日志校验"发现 4 个运行时缺陷，
+> 其中 1 个为 **P0**：模块销毁时必然抛 `NullReferenceException`。
+> 这些缺陷此前**全部被测试绿灯掩盖**（异常被 `try/catch` 吞进日志，而旧测试脚本不看日志），
+> 修复后同时补上了对应回归测试与日志错误护栏。
+
+### Fixed
+
+**P0 — 模块实例获取（`ModuleManager`）**
+
+- **产出"幽灵实例"，Dispose 时必崩**（回归测试 `ModuleManagerTests` ×5 抓到）：`CreateInstance` 用 `type.GetProperty("Instance", Public|Static)` 找懒加载单例入口，而 .NET **不会沿继承链返回声明在泛型基类上的静态属性**。`ResourcesManager` / `LocalizationManager`（均继承 `SingletonBase<T>`）因此全部落进 `Activator.CreateInstance` 回退分支，造出 **`Init()` 从未执行**的实例：它与 `Xxx.Instance` 不是同一个对象、`_loader` 为 null。业务侧全走 `Instance` 所以运行时表现正常，直到销毁时才炸 —— `ModuleManager.OnDestroy → ResourcesManager.Dispose → ReleaseAll → NullReferenceException`。**修复**：逐级 `BaseType` 查找静态 `Instance`（校验返回类型可赋值给模块类型），用 `Delegate.CreateDelegate` 缓存获取器。
+- **记录到"即将自我销毁的重复实例"**：若 `UIManager.Instance` 之类在模块初始化之前已被访问，`AddComponent` 会造出第二个实例，它在 `Awake` 里立刻 `Destroy` 自己，而 `_instancesByTypeName` 记下的正是这个将死的对象。**修复**：AddComponent 前后各探一次继承链上的 `TryGetExisting`，已有存活单例则直接沿用。
+- **反射回退路径静默跳过 `Init()`**：没有静态 `Instance` 的类型仍走 `Activator`（行为保持不变，向后兼容），但现在会打 Warning 明确提示"`Init()` 不会被执行，请把初始化放进 `InitializeAsync()`"。
+
+**资源**
+
+- **`ResourcesManager._loader` 可能为 null**：新增惰性 `Loader` 访问点，任何取用路径都拿得到可用加载器；`Init()` 仍照常赋值。即使将来再有代码绕过 `Instance` 拿到对象，`ReleaseAll` / `Load` 也不会再抛 NRE。
+
+**日志**
+
+- **启动缓冲满时静默丢日志**：缓冲达上限（256）后原实现是"丢弃最旧一条"，但若本会话里 `LogManager` 永远不会被创建（典型：EditMode 测试中 `AddComponent` 不触发 `Awake`；或模块清单里漏配 `LogManager`），缓冲永不回放，日志会**整段消失**，排查时看起来"什么都没发生"。**修复**：缓冲满时溢出到 Unity 控制台（`WriteFallbackToUnityConsole`），宁可吵也不丢。
+
+**会话重置（关域重载 DR-off）**
+
+- **开放泛型类型上的会话重置从未生效**（Phase 7 完整性测试发现）：引擎不会为闭合泛型类型调用声明在开放泛型类型中的 `[RuntimeInitializeOnLoadMethod]`（已实测 Unity 2022.3.62f3c1），导致 DR-off 下 `SingletonBase<T>` 静态实例、`ScriptableConfigCache<T>` 配置缓存、`UnitySingleton<T>` 的 `_instance`/`IsExisted`/`_isQuitting` 全部跨 Play 会话残留——**0.9.0 里"进入 Play 自动重置"的声明对这三类不成立**。新增非泛型 `RuntimeSessionReset`（Runtime/Singleton）作为引擎回调入口：三个泛型类在静态构造函数里注册重置委托（注册时立即执行一次），每次进 Play 遍历重置；泛型类型上的旧特性仅保留作静态审计标记。
+
+**编辑器护栏**
+
+- **构建拦截开关不持久**（Phase 7.4）：`FailBuildOnHardViolation` 由内存静态字段改为按工程的 `EditorPrefs`（key 含工程路径），菜单勾选跨编译/重启保留；默认仍为关闭，不改变现有出包行为。
+- **扫描报告落盘**（Phase 7.4）：全量扫描与构建拦截共用 `ScanProject()`，结果写工程根 `Artifacts/ArchitectureGuardrail/report.json`（时间戳、开关、文件数、错误/提醒/读取失败计数与逐条违规），供 CI 消费；读取失败的文件计入 `ReadFailures`，开启拦截时同样中止构建；空工程（无 `Assets/Scripts`）产出零文件报告而非抛异常；测试程序集目录（`/Tests/`、`/TestsPlayMode/`）纳入排除清单。
+
+### Added
+- `RuntimeSessionReset`（Runtime/Singleton）：非泛型会话重置中枢，替代在开放泛型类型上无效的引擎回调。
+- 回归测试：`ModuleManagerTests` ×5（泛型基类静态属性前提、`GetModule` 返回真实例、`Dispose` 不抛、沿用既有单例、反射回退边界）。
+
+### Notes
+- 本次未改动任何公开 API 签名，升级保持源码兼容。
+- 测试基线（demo 工程）：EditMode 62 + PlayMode 27 = **89 全绿**。
+
 ## [0.9.0] - 2026-10-12
 
 首个包形态版本，已打 tag `v0.9.0`。自 LFramework（XYFrameWorkDemo/Assets/Scripts/Core）整体迁入：迁入前完成 Phase 1 止血修复；迁入后完成 Phase 5 第一批（5.1–5.3，提交 `5c486eb`）、第二批（5.4 / 5.6 / 5.8，提交 `501236f`）、5.5（提交 `313a527`）与 5.7 前半（提交 `fb0689c`）的内核打磨，以及 Phase 6 的文档产出（`Documentation~/`）。
